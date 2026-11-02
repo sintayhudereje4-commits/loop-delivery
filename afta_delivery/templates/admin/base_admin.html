@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="{{ current_lang }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Admin{% endblock %} - Afta Delivery</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/admin.css') }}">
+</head>
+<body class="admin-body">
+    <aside class="admin-sidebar">
+        <div class="sidebar-brand">
+            <a href="{{ url_for('admin_dashboard') }}">Afta Admin</a>
+        </div>
+        <nav class="sidebar-nav">
+            <a href="{{ url_for('admin_dashboard') }}" class="nav-item {% if request.endpoint == 'admin_dashboard' %}active{% endif %}">Dashboard</a>
+            <a href="{{ url_for('admin_products') }}" class="nav-item {% if 'product' in request.endpoint %}active{% endif %}">Products</a>
+            <a href="{{ url_for('admin_categories') }}" class="nav-item {% if request.endpoint == 'admin_categories' %}active{% endif %}">Categories</a>
+            <a href="{{ url_for('admin_orders') }}" class="nav-item {% if 'order' in request.endpoint %}active{% endif %}">Orders</a>
+            <a href="{{ url_for('admin_customers') }}" class="nav-item {% if request.endpoint == 'admin_customers' %}active{% endif %}">Customers</a>
+            <a href="{{ url_for('admin_banks') }}" class="nav-item {% if request.endpoint == 'admin_banks' %}active{% endif %}">Banks</a>
+            <a href="{{ url_for('admin_transporters') }}" class="nav-item {% if request.endpoint == 'admin_transporters' %}active{% endif %}">Transporters</a>
+            <a href="{{ url_for('admin_support') }}" class="nav-item {% if 'support' in request.endpoint %}active{% endif %}">Support</a>
+            <a href="{{ url_for('admin_vat_delivery') }}" class="nav-item {% if request.endpoint == 'admin_vat_delivery' %}active{% endif %}">VAT &amp; Delivery</a>
+            <a href="{{ url_for('admin_bank_ledger') }}" class="nav-item {% if request.endpoint in ('admin_bank_ledger',) %}active{% endif %}">Money received</a>
+            <a href="{{ url_for('admin_admins') }}" class="nav-item {% if request.endpoint == 'admin_admins' %}active{% endif %}">Admins</a>
+            <a href="{{ url_for('admin_audit') }}" class="nav-item {% if request.endpoint == 'admin_audit' %}active{% endif %}">Audit log</a>
+            <a href="{{ url_for('admin_settings') }}" class="nav-item {% if request.endpoint == 'admin_settings' %}active{% endif %}">Settings</a>
+            <a href="{{ url_for('index') }}" class="nav-item" target="_blank">View Site</a>
+            <form method="POST" action="{{ url_for('admin_logout') }}" class="inline-form">
+<input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="nav-item logout link-btn">Logout</button></form>
+        </nav>
+    </aside>
+    <main class="admin-main">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                <div class="flash-container">
+                    {% for category, message in messages %}
+                        <div class="flash flash-{{ category }}">{{ message }}</div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        {% endwith %}
+        {% block content %}{% endblock %}
+    </main>
+
+    {# Visible live auto-refresh badge (Orders / Support / Customers / Dashboard) #}
+    <div id="liveRefreshBadge" hidden
+         style="position:fixed;bottom:18px;right:18px;z-index:9999;
+                background:#1b5e20;color:#fff;padding:8px 14px;border-radius:24px;
+                font-size:13px;font-weight:600;box-shadow:0 4px 14px rgba(0,0,0,.25);
+                display:flex;align-items:center;gap:8px;font-family:Inter,sans-serif;">
+      <span id="liveDot" style="width:10px;height:10px;border-radius:50%;background:#69f0ae;
+            box-shadow:0 0 0 0 rgba(105,240,174,.7);animation:livePulse 1.5s infinite;"></span>
+      <span id="liveText">Live · every 5s</span>
+    </div>
+    <style>
+      @keyframes livePulse {
+        0% { box-shadow: 0 0 0 0 rgba(105,240,174,.6); }
+        70% { box-shadow: 0 0 0 8px rgba(105,240,174,0); }
+        100% { box-shadow: 0 0 0 0 rgba(105,240,174,0); }
+      }
+      #liveRefreshBadge.updating { background:#e65100; }
+      #liveRefreshBadge.paused { background:#546e7a; }
+      #liveRefreshBadge.paused #liveDot { animation: none; background:#b0bec5; }
+    </style>
+<script>
+(function(){
+  var tok = {{ csrf_token()|tojson }};
+  document.querySelectorAll('form[method="post"], form[method="POST"]').forEach(function(f){
+    if (!f.querySelector('input[name="csrf_token"]')) {
+      var i = document.createElement('input');
+      i.type = 'hidden'; i.name = 'csrf_token'; i.value = tok;
+      f.appendChild(i);
+    }
+  });
+
+  // Live auto-refresh every 5s — Orders, Support, Customers, Dashboard
+  var ep = '{{ request.endpoint or "" }}';
+  var softPages = ['admin_dashboard', 'admin_orders', 'admin_support', 'admin_customers'];
+  if (softPages.indexOf(ep) === -1) return;
+
+  var badge = document.getElementById('liveRefreshBadge');
+  var liveText = document.getElementById('liveText');
+  var INTERVAL_MS = (ep === 'admin_orders') ? 10000 : 5000;
+  var lastCheck = Date.now();
+  var fingerprint = '';
+
+  // Keep live polling but hide the on-screen badge (user request)
+  if (badge) badge.hidden = true;
+
+  function setBadge(state, msg) {
+    if (!badge) return;
+    badge.hidden = true; // never show
+    badge.classList.remove('updating', 'paused');
+    if (state) badge.classList.add(state);
+    if (liveText && msg) liveText.textContent = msg;
+  }
+
+  function secondsAgo() {
+    return Math.max(0, Math.round((Date.now() - lastCheck) / 1000));
+  }
+
+  function isPaused() {
+    if (document.visibilityState !== 'visible') return 'tab';
+    var ae = document.activeElement;
+    if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.tagName === 'SELECT')) return 'typing';
+    var dirty = false;
+    document.querySelectorAll('input[type="search"], input[name="q"], input[name="search"]').forEach(function(el){
+      if ((el.value || '').trim()) dirty = true;
+    });
+    if (dirty) return 'search';
+    // Orders bulk form: pause while admin is editing any field
+    if (ep === 'admin_orders') {
+      var form = document.getElementById('ordersBulkForm');
+      if (form && form.getAttribute('data-dirty') === '1') return 'editing';
+    }
+    return null;
+  }
+
+  function tickLabel() {
+    var p = isPaused();
+    if (p === 'tab') { setBadge('paused', 'Paused (tab hidden)'); return; }
+    if (p === 'typing') { setBadge('paused', 'Paused (typing…)'); return; }
+    if (p === 'search') { setBadge('paused', 'Paused (search active)'); return; }
+    setBadge('', 'Live · checked ' + secondsAgo() + 's ago');
+  }
+
+  function poll() {
+    var p = isPaused();
+    if (p) { tickLabel(); return; }
+
+    setBadge('updating', 'Checking…');
+    var url = '/admin/api/live?page=' + encodeURIComponent(ep);
+    try {
+      var params = new URLSearchParams(window.location.search);
+      if (params.get('status')) url += '&status=' + encodeURIComponent(params.get('status'));
+      if (params.get('q')) url += '&q=' + encodeURIComponent(params.get('q'));
+    } catch (e) {}
+
+    fetch(url, { credentials: 'same-origin', headers: { 'Accept': 'application/json' } })
+      .then(function(r){
+        if (r.status === 401 || r.status === 403) {
+          window.location.href = '/admin/login';
+          return null;
+        }
+        if (!r.ok) throw new Error('bad status');
+        return r.json();
+      })
+      .then(function(data){
+        if (!data || !data.fp) return;
+        lastCheck = Date.now();
+        if (!fingerprint) {
+          fingerprint = data.fp;
+          setBadge('', 'Live · every 5s');
+          return;
+        }
+        if (data.fp !== fingerprint) {
+          fingerprint = data.fp;
+          setBadge('updating', 'New data — updating…');
+          try { sessionStorage.setItem('aftaBeep', '1'); } catch (e) {}
+          location.reload();
+          return;
+        }
+        setBadge('', 'Live · up to date');
+      })
+      .catch(function(){
+        setBadge('paused', 'Live · retrying…');
+      });
+  }
+
+  // Short beep + title marker after the page reloaded because something new arrived.
+  try {
+    if (sessionStorage.getItem('aftaBeep') === '1') {
+      sessionStorage.removeItem('aftaBeep');
+      if (ep === 'admin_orders' || ep === 'admin_dashboard' || ep === 'admin_support') {
+        document.title = '● ' + document.title;
+        var AC = window.AudioContext || window.webkitAudioContext;
+        if (AC) {
+          var ctx = new AC(), osc = ctx.createOscillator(), gain = ctx.createGain();
+          osc.connect(gain); gain.connect(ctx.destination);
+          osc.frequency.value = 880; gain.gain.value = 0.08;
+          osc.start(); osc.stop(ctx.currentTime + 0.25);
+        }
+      }
+    }
+  } catch (e) {}
+
+  setInterval(tickLabel, 1000);
+  setInterval(poll, INTERVAL_MS);
+  setTimeout(poll, 600);
+  document.addEventListener('visibilitychange', tickLabel);
+  tickLabel();
+})();
+</script>
+</body>
+</html>

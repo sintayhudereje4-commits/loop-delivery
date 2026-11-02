@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% block title %}{{ settings.site_name }} - {% if current_lang == 'am' %}ጥራት ያላቸው እህሎች{% else %}Quality Grains & Legumes{% endif %}{% endblock %}
+
+    {% block search_bar %}
+    <div class="search-strip">
+        <div class="container">
+            <form class="search-form" action="{{ url_for('index') }}" method="GET" role="search" autocomplete="off">
+                <input type="search" id="siteSearch" name="q" value="{{ search_q or '' }}" maxlength="60"
+                       placeholder="{% if current_lang == 'am' %}እቃ ይፈልጉ{% else %}Search products{% endif %}"
+                       aria-label="{% if current_lang == 'am' %}እቃ ፈልግ{% else %}Search products{% endif %}" autocomplete="off">
+                <button type="submit" class="search-btn" aria-label="{% if current_lang == 'am' %}ፈልግ{% else %}Search{% endif %}">🔍</button>
+                <div class="search-suggest" id="searchSuggest" hidden></div>
+            </form>
+        </div>
+    </div>
+    {% endblock %}
+
+{% block content %}
+<section class="hero">
+    <div class="container">
+        <h1>{% if current_lang == 'am' %}ወደ ቤትዎ የሚደርስ ጥራት ያለው እህል{% else %}Quality Grains Delivered to Your Door{% endif %}</h1>
+        {% set tagline = (settings.hero_tagline_am or settings.hero_tagline_en) if current_lang == 'am' else (settings.hero_tagline_en or settings.hero_tagline_am) %}
+        {% if tagline %}<p>{{ tagline }}</p>{% endif %}
+    </div>
+</section>
+
+<section class="products-section">
+    <div class="container">
+        <h2 class="section-title">{% if current_lang == 'am' %}ምርቶቻችን{% else %}Our Products{% endif %}</h2>
+
+        {% if search_q %}
+        <p class="search-result-note">
+            {% if current_lang == 'am' %}
+                «{{ search_q }}» — {{ products|length }} ምርት ተገኝቷል
+            {% else %}
+                {{ products|length }} result{{ '' if products|length == 1 else 's' }} for “{{ search_q }}”
+            {% endif %}
+            · <a href="{{ url_for('index') }}">{% if current_lang == 'am' %}ፍለጋውን አጽዳ{% else %}Clear search{% endif %}</a>
+        </p>
+        {% endif %}
+
+        {% if categories %}
+        <div class="category-tabs">
+            <a href="{{ url_for('index') }}"
+               class="category-tab {% if not active_category %}active{% endif %}">
+                {% if current_lang == 'am' %}ሁሉም{% else %}All{% endif %}
+            </a>
+            {% for c in categories %}
+            <a href="{{ url_for('index', category=c.id) }}"
+               class="category-tab {% if active_category == c.id %}active{% endif %}">
+                {% if current_lang == 'am' %}{{ c.name_am }}{% else %}{{ c.name_en }}{% endif %}
+            </a>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        <div class="products-grid">
+            {% for product in products %}
+            <article class="product-card">
+                <a href="{{ url_for('product_detail', product_id=product.id) }}" class="product-link">
+                    <div class="product-image">
+                        {% if product.image_path %}
+                            <img src="{{ url_for('static', filename=product.image_path) }}" alt="{{ product.name_am if current_lang == 'am' else product.name_en }}" loading="lazy">
+                        {% else %}
+                            <div class="product-placeholder">
+                                <span>{{ (product.name_am if current_lang == 'am' else product.name_en)[0] }}</span>
+                            </div>
+                        {% endif %}
+                    </div>
+                    <div class="product-info">
+                        <h3>{{ product.name_am if current_lang == 'am' else product.name_en }}</h3>
+                        <p class="product-desc">{{ (product.description_am if current_lang == 'am' else product.description_en)[:80] }}{% if (product.description_am if current_lang == 'am' else product.description_en)|length > 80 %}...{% endif %}</p>
+                        {% set priced = product.variants|selectattr('is_available')|selectattr('stock', 'gt', 0)|selectattr('price', 'gt', 0)|map(attribute='price')|list %}
+                        {% if priced %}
+                            <p class="product-price">
+                                {% if current_lang == 'am' %}ከ{% else %}From{% endif %}
+                                <strong>{{ "%.0f"|format(priced|min) }} ብር</strong>
+                                <span class="vat-badge" style="display:block;font-size:.75rem;font-weight:600;color:{% if (product.vat_percent or 0) > 0 %}#2e7d32{% else %}#1565c0{% endif %};margin-top:2px;">
+                                    {{ product_vat_label(product.vat_percent, current_lang) }}
+                                </span>
+                            </p>
+                        {% else %}
+                            <p class="product-price" style="color:#888;">{% if current_lang == 'am' %}አሁን አይገኝም{% else %}Out of stock{% endif %}</p>
+                        {% endif %}
+                    </div>
+                </a>
+                <a href="{{ url_for('product_detail', product_id=product.id) }}" class="btn btn-primary btn-sm">
+                    {% if current_lang == 'am' %}ይመልከቱ{% else %}View{% endif %}
+                </a>
+            </article>
+            {% else %}
+            <p class="empty-msg">
+                {% if search_q %}
+                    {% if current_lang == 'am' %}ምንም ምርት አልተገኘም። በሌላ ቃል ይሞክሩ።{% else %}No product matches your search. Try another word.{% endif %}
+                {% else %}
+                    {% if current_lang == 'am' %}ምንም ምርት አልተገኘም{% else %}No products available{% endif %}
+                {% endif %}
+            </p>
+            {% endfor %}
+        </div>
+    </div>
+</section>
+{% endblock %}
