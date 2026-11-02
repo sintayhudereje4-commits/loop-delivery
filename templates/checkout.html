@@ -1,0 +1,447 @@
+{% extends "base.html" %}
+{% block title %}{% if current_lang == 'am' %}ክፍያ{% else %}Checkout{% endif %} - {{ settings.site_name }}{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+<style>
+  #mapPicker { height: 280px; width: 100%; border-radius: 12px; margin-top: 12px; border: 2px solid #e0e0e0; z-index: 1; }
+  .map-hint { font-size: 0.85rem; color: #555; margin-top: 8px; }
+  .coord-display { font-size: 0.8rem; color: #666; margin-top: 6px; font-family: monospace; }
+  .payment-box { background: #fff8e1; border: 1px solid #ffe082; border-radius: 12px; padding: 16px; margin: 16px 0; }
+  .payment-box h3 { margin-bottom: 10px; font-size: 1.05rem; }
+  .bank-card { background: #fff; border: 1px solid #eee; border-radius: 8px; padding: 12px; margin-bottom: 8px; cursor: pointer; }
+  .bank-card input { margin-right: 8px; }
+  .bank-card.selected { border-color: var(--primary); background: #e8f5e9; }
+</style>
+{% endblock %}
+
+{% block content %}
+<section class="checkout-section">
+    <div class="container">
+        <h1>{% if current_lang == 'am' %}ትዕዛዝ ያስገቡ{% else %}Place Your Order{% endif %}</h1>
+        <div class="checkout-grid">
+            <div class="checkout-form-wrap">
+                <form id="checkoutForm" enctype="multipart/form-data" novalidate>
+                    <div class="form-group">
+                        <label for="customer_name">{% if current_lang == 'am' %}ስም (አማራጭ){% else %}Name (optional){% endif %}</label>
+                        <input type="text" id="customer_name" name="customer_name" value="{{ current_customer.name if current_customer else '' }}">
+                    </div>
+                    <div class="form-group">
+                        <label for="phone">{% if current_lang == 'am' %}ስልክ ቁጥር *{% else %}Phone Number *{% endif %}</label>
+                        <input type="tel" id="phone" name="phone" required placeholder="09xxxxxxxx" inputmode="tel"
+                               value="{{ current_customer.phone if current_customer else '' }}">
+                    </div>
+
+                    <div class="form-group location-group">
+                        <label>{% if current_lang == 'am' %}የመላኪያ ቦታ *{% else %}Delivery location *{% endif %}</label>
+                        <p class="map-hint">
+                            {% if current_lang == 'am' %}
+                            አውቶማቲክ ቦታዎን ለመላክ ፈቃድ ይስጡ። ካልተስማማ ወይም ትክክል ካልሆነ ፒኑን ይጎትቱ።
+                            {% else %}
+                            Allow location access to auto-send your place. If wrong, drag the pin.
+                            {% endif %}
+                        </p>
+                        <div style="display:flex;flex-wrap:wrap;gap:8px;margin:8px 0;">
+                            <button type="button" class="btn btn-primary btn-sm" id="btnGps">
+                                {% if current_lang == 'am' %}📍 የእኔን ቦታ አግኝ{% else %}📍 Use my location{% endif %}
+                            </button>
+                            <a id="btnGoogleMaps" class="btn btn-outline btn-sm" href="https://maps.google.com" target="_blank" rel="noopener">
+                                {% if current_lang == 'am' %}Google Map ክፈት{% else %}Open Google Maps{% endif %}
+                            </a>
+                        </div>
+                        <p id="gpsStatus" class="map-hint" style="color:#1565c0;"></p>
+                        <div id="mapPicker"></div>
+                        <p id="coordDisplay" class="coord-display"></p>
+                        <input type="hidden" id="latitude" name="latitude">
+                        <input type="hidden" id="longitude" name="longitude">
+                        <input type="hidden" id="location_method" name="location_method" value="manual">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="address_text">{% if current_lang == 'am' %}አድራሻ (በጽሁፍ){% else %}Address (text){% endif %}</label>
+                        <textarea id="address_text" name="address_text" rows="2" placeholder="{% if current_lang == 'am' %}ክፍለ ከተማ፣ ሰፈር...{% else %}Subcity, neighborhood...{% endif %}"></textarea>
+                    </div>
+
+                    <div id="paymentSection" class="payment-box" style="display:none;">
+                        <h3>{% if current_lang == 'am' %}ባንክ ክፍያ (100–100,000 ብር){% else %}Bank payment (100–100,000 ETB){% endif %}</h3>
+                        <p id="payAmountLine"></p>
+                        <p style="font-size:0.9rem;margin-bottom:10px;">
+                            {% if current_lang == 'am' %}
+                            ብሩን ወደ ከታች ካሉ አካውንቶች አስገብተው <strong>ትራንዛክሽን ID</strong> ወይም <strong>የደረሰኝ ፎቶ</strong> ይላኩ።
+                            {% else %}
+                            Deposit to an account below, then send <strong>transaction ID</strong> or <strong>receipt photo</strong>.
+                            {% endif %}
+                        </p>
+                        <div class="form-group">
+                            <label for="bank_account_id">{% if current_lang == 'am' %}የባንክ አይነት ይምረጡ *{% else %}Select bank type *{% endif %}</label>
+                            <select id="bank_account_id" name="bank_account_id">
+                                <option value="">{% if current_lang == 'am' %}-- ባንክ ይምረጡ --{% else %}-- Choose bank --{% endif %}</option>
+                                {% for b in banks %}
+                                <option value="{{ b.id }}"
+                                    data-name="{{ b.account_name }}"
+                                    data-number="{{ b.account_number }}"
+                                    data-bank="{{ b.bank_name }}">
+                                    {{ b.bank_name }}
+                                </option>
+                                {% endfor %}
+                            </select>
+                            {% if not banks %}
+                            <p style="color:#c62828;margin-top:8px;">{% if current_lang == 'am' %}የባንክ ክፍያ ለጊዜው አልተዘጋጀም — እባክዎ ያነጋግሩን{% else %}Bank payment is not available right now — please contact us{% endif %}</p>
+                            {% endif %}
+                        </div>
+                        <div id="bankDetails" class="bank-card" style="display:none;cursor:default;">
+                            <p><strong id="bdBank"></strong></p>
+                            <p>{% if current_lang == 'am' %}ባለቤት{% else %}Account name{% endif %}: <span id="bdName"></span></p>
+                            <p>{% if current_lang == 'am' %}አካውንት ቁጥር{% else %}Account number{% endif %}: <code id="bdNumber"></code>
+                               <button type="button" class="btn btn-sm btn-outline" id="copyAcc" style="margin-left:8px;">{% if current_lang == 'am' %}ቅዳ{% else %}Copy{% endif %}</button>
+                            </p>
+                        </div>
+                        <div class="form-group">
+                            <label>{% if current_lang == 'am' %}ትራንዛክሽን ID{% else %}Transaction ID{% endif %}</label>
+                            <input type="text" id="transaction_id" name="transaction_id" placeholder="e.g. FT123...">
+                        </div>
+                        <div class="form-group">
+                            <label>{% if current_lang == 'am' %}የደረሰኝ ፎቶ{% else %}Receipt photo{% endif %}</label>
+                            <input type="file" id="receipt" name="receipt" accept="image/*">
+                        </div>
+                    </div>
+
+                    <button type="submit" class="btn btn-primary btn-lg btn-block" id="submitOrderBtn">
+                        {% if current_lang == 'am' %}ትዕዛዝ አስገባ{% else %}Submit Order{% endif %}
+                    </button>
+                </form>
+            </div>
+            <div class="checkout-summary">
+                <h3>{% if current_lang == 'am' %}ማጠቃለያ{% else %}Summary{% endif %}</h3>
+                <div id="orderSummary"></div>
+            </div>
+        </div>
+    </div>
+</section>
+{% endblock %}
+
+{% block extra_js %}
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const PREPAY_MIN = {{ prepay_min }};
+    const PREPAY_MAX = {{ prepay_max }};
+    let cart = getCart();
+    if (!cart.length) { window.location.href = '{{ url_for("cart") }}'; return; }
+
+    let total = 0;
+    let needPay = false;
+    let forcePay = false;   // set when the server says bank payment is required
+    const paySec = document.getElementById('paymentSection');
+    const bankSel = document.getElementById('bank_account_id');
+    const txInput = document.getElementById('transaction_id');
+    const recInput = document.getElementById('receipt');
+    const overNote = document.createElement('p');
+    overNote.style.cssText = 'background:#e3f2fd;padding:12px;border-radius:8px;margin:12px 0;color:#1565c0;display:none;';
+    overNote.textContent = '{% if current_lang == "am" %}ከ 100,000 ብር በላይ፦ የማድረሻ ክፍያ ከተጨመረ በኋላ {{ deposit_percent }}% ቅድመ ክፍያ በባንክ ይከፍላሉ፤ የቀረውን እቃው ሲደርስ ለአጓጓዡ በጥሬ ገንዘብ ይከፍላሉ።{% else %}Over 100,000 ETB: once the delivery fee is added you pay {{ deposit_percent }}% by bank as a deposit, and the rest in cash to the transporter when the goods arrive.{% endif %}';
+    paySec.parentNode.insertBefore(overNote, paySec);
+
+    // Summary and payment box are always derived from the CURRENT cart prices,
+    // and re-derived whenever the prices are refreshed from the server.
+    function renderSummary() {
+        total = 0;
+        let vatTotal = 0;
+        let html = '<ul class="summary-list">';
+        cart.forEach(item => {
+            const qty = item.quantity || 1;
+            const unitPrice = item.price || 0;
+            const sub = unitPrice * qty;
+            total += sub;
+            const u = item.unit_label || item.unit || 'kg';
+            const vatPct = parseFloat(item.vat_percent);
+            const rate = isNaN(vatPct) ? 0 : vatPct;
+            // VAT inclusive: VAT portion of line = sub * rate/(100+rate)
+            const vatAmt = rate > 0 ? sub * rate / (100 + rate) : 0;
+            vatTotal += vatAmt;
+            html += `<li><span>${escapeHtml(item.name)} (${escapeHtml(String(item.weight_kg))}${escapeHtml(u)}) × ${escapeHtml(String(qty))}</span><span>${sub.toFixed(0)} ብር</span></li>`;
+            if (rate > 0) {
+              html += `<li style="opacity:.85;font-size:.88rem;color:#555;padding-left:8px;"><span>VAT ${rate}% × ${escapeHtml(String(qty))}</span><span>${vatAmt.toFixed(0)} ብር</span></li>`;
+            }
+        });
+        html += `<li style="opacity:.9;font-size:.92rem;"><span>{% if current_lang == "am" %}የዴሊቨሪ ክፍያ{% else %}Delivery fee{% endif %}</span><span>{% if current_lang == "am" %}በቦታው ሁኔታ ይሰላል{% else %}Calculated by location{% endif %}</span></li>`;
+        html += `</ul><div class="summary-total"><strong>{% if current_lang == "am" %}ጠቅላላ (ያለ ዴሊቨሪ){% else %}Total (without delivery){% endif %}: ${total.toFixed(0)} ብር</strong></div>`;
+        document.getElementById('orderSummary').innerHTML = html;
+
+        // Payment is requested later by admin after they set the delivery fee
+        needPay = false;
+        if (paySec) paySec.style.display = 'none';
+        if (bankSel) bankSel.disabled = true;
+        if (txInput) txInput.disabled = true;
+        if (recInput) recInput.disabled = true;
+        if (overNote) {
+          overNote.style.display = 'block';
+          overNote.style.background = '#fff8e1';
+          overNote.style.color = '#e65100';
+          overNote.textContent = '{% if current_lang == "am" %}ትዕዛዝዎን ተቀብለን የማድረሻ ክፍያውን እናሳውቅዎታለን። ከዚያ በኋላ የክፍያ መመሪያ ያያሉ።{% else %}We will receive your order first and tell you the delivery fee. After that you will see the payment instructions.{% endif %}';
+        }
+        var payLine = document.getElementById('payAmountLine');
+        if (payLine) payLine.innerHTML = '';
+    }
+    renderSummary();
+    // Prices may have changed since the items were added: refresh, then recompute everything
+    refreshCartPrices(function (fresh) {
+        cart = fresh;
+        if (!cart.length) { window.location.href = '{{ url_for("cart") }}'; return; }
+        renderSummary();
+    });
+
+    const latInput = document.getElementById('latitude');
+    const lngInput = document.getElementById('longitude');
+    const coordDisplay = document.getElementById('coordDisplay');
+    const methodInput = document.getElementById('location_method');
+    const gpsStatus = document.getElementById('gpsStatus');
+    const btnGoogle = document.getElementById('btnGoogleMaps');
+    let lat = 9.03, lng = 38.74;
+    // The map library comes from a CDN; if it cannot load (offline / blocked) the customer can
+    // still order with GPS or by pasting coordinates.
+    const hasMap = (typeof L !== 'undefined');
+    let map = null, marker = null;
+    if (hasMap) {
+        map = L.map('mapPicker').setView([lat, lng], 15);
+        // Esri World Street Map — free, no API key, reliable
+        // (OSM official tiles block many apps with 403)
+        L.tileLayer('{{ map_tiles_url }}', {
+            maxZoom: 19,
+            attribution: '{{ map_attribution }}'
+        }).addTo(map);
+        marker = L.marker([lat, lng], { draggable: true }).addTo(map);
+    } else {
+        const mp = document.getElementById('mapPicker');
+        mp.style.height = 'auto';
+        mp.style.padding = '12px';
+        mp.style.background = '#fff3e0';
+        mp.textContent = '{% if current_lang == "am" %}ካርታው አልተጫነም — "የእኔን ቦታ አግኝ" ይጫኑ።{% else %}The map could not be loaded — use "Use my location".{% endif %}';
+    }
+
+    function updateGoogleLink(a, b) {
+        btnGoogle.href = 'https://www.google.com/maps?q=' + a + ',' + b;
+    }
+    let locationConfirmed = false;
+    let locationAccuracy = null;
+    function setCoords(a, b, method, confirmed, accuracy) {
+        lat = a; lng = b;
+        latInput.value = a;
+        lngInput.value = b;
+        coordDisplay.textContent = a.toFixed(6) + ', ' + b.toFixed(6);
+        if (hasMap) {
+            marker.setLatLng([a, b]);
+            map.setView([a, b], Math.max(map.getZoom(), 16));
+        }
+        updateGoogleLink(a, b);
+        if (method) methodInput.value = method;
+        if (confirmed !== false) locationConfirmed = true;
+        locationAccuracy = (typeof accuracy === 'number' && isFinite(accuracy)) ? accuracy : null;
+    }
+    // Preview only — does NOT count as chosen location until user acts
+    if (hasMap) {
+        marker.setLatLng([lat, lng]);
+        map.setView([lat, lng], 13);
+    }
+    updateGoogleLink(lat, lng);
+    coordDisplay.textContent = '{% if current_lang == "am" %}ቦታ ገና አልተመረጠም — GPS ወይም ፒን ይጠቀሙ{% else %}Location not set yet — use GPS or drag pin{% endif %}';
+    latInput.value = '';
+    lngInput.value = '';
+    if (hasMap) {
+        marker.on('dragend', function () {
+            const p = marker.getLatLng();
+            setCoords(p.lat, p.lng, 'manual');
+            gpsStatus.textContent = '{% if current_lang == "am" %}በእጅ ተስተካክሏል{% else %}Adjusted manually{% endif %}';
+        });
+        map.on('click', function (e) {
+            setCoords(e.latlng.lat, e.latlng.lng, 'manual');
+            gpsStatus.textContent = '{% if current_lang == "am" %}በእጅ ተመርጧል{% else %}Selected on map{% endif %}';
+        });
+        // Map often starts in a zero-width layout until paint finishes
+        [100, 300, 800].forEach(function (ms) {
+            setTimeout(function () { try { map.invalidateSize(); } catch (e) {} }, ms);
+        });
+        // If tiles fail (bad key / network), show a gentle note
+        var tileErrors = 0;
+        map.on('tileerror', function () {
+            tileErrors++;
+            if (tileErrors === 3 && gpsStatus) {
+                gpsStatus.style.color = '#e65100';
+                gpsStatus.textContent = '{% if current_lang == "am" %}ካርታ tiles አልተጫኑም — GPS ይጠቀሙ። (MAP_TILES_URL / API key ይፈትሹ){% else %}Map tiles failed to load — use GPS. (Check MAP_TILES_URL / API key){% endif %}';
+            }
+        });
+    }
+
+    function requestGps() {
+        // Browsers block GPS on http://LAN-IP (only https or localhost allowed)
+        if (!window.isSecureContext && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+            gpsStatus.style.color = '#e65100';
+            gpsStatus.innerHTML = '{% if current_lang == "am" %}' +
+                '⚠ በስልክ ላይ GPS ለ http://IP አይሰራም (የአሳሽ ደንብ)። ካርታ ላይ ፒኑን ይጎትቱ።' +
+                '{% else %}' +
+                '⚠ Mobile browsers block GPS on http://IP addresses. Drag the pin on the map.' +
+                '{% endif %}';
+            return;
+        }
+        if (!navigator.geolocation) {
+            gpsStatus.textContent = '{% if current_lang == "am" %}GPS አይደገፍም — ካርታ ላይ ይምረጡ{% else %}GPS not supported — pick on map{% endif %}';
+            return;
+        }
+        gpsStatus.style.color = '#1565c0';
+        gpsStatus.textContent = '{% if current_lang == "am" %}ቦታዎን በመፈለግ ላይ… ፈቃድ ይስጡ{% else %}Finding your location… please allow{% endif %}';
+        navigator.geolocation.getCurrentPosition(
+            function (pos) {
+                setCoords(pos.coords.latitude, pos.coords.longitude, 'gps', true, pos.coords.accuracy);
+                gpsStatus.style.color = '#2e7d32';
+                gpsStatus.textContent = '{% if current_lang == "am" %}✓ ቦታዎ ተገኝቷል (ትክክለኛነት ~' + Math.round(pos.coords.accuracy || 0) + 'm){% else %}✓ Location found (~' + Math.round(pos.coords.accuracy || 0) + 'm){% endif %}';
+            },
+            function (err) {
+                gpsStatus.style.color = '#e65100';
+                var code = err && err.code;
+                var tip = '{% if current_lang == "am" %}ፒኑን ይጎትቱ{% else %}Drag the pin on the map{% endif %}';
+                if (code === 1) {
+                    gpsStatus.textContent = '{% if current_lang == "am" %}ቦታ ፈቃድ ተከልክሏል — በአሳሽ Settings → Location Allow ያድርጉ። {% else %}Permission denied — enable Location in browser Settings. {% endif %}' + tip;
+                } else if (code === 3) {
+                    gpsStatus.textContent = '{% if current_lang == "am" %}ጊዜ አልቋል። {% else %}Timed out. {% endif %}' + tip;
+                } else {
+                    gpsStatus.textContent = '{% if current_lang == "am" %}ቦታ አልተገኘም። {% else %}Location failed. {% endif %}' + tip;
+                }
+            },
+            { enableHighAccuracy: true, timeout: 25000, maximumAge: 0 }
+        );
+    }
+    document.getElementById('btnGps').addEventListener('click', requestGps);
+
+    // Do NOT auto-request GPS on page load — many users deny the prompt.
+    if (!(window.isSecureContext || location.hostname === 'localhost' || location.hostname === '127.0.0.1')) {
+        gpsStatus.style.color = '#e65100';
+        gpsStatus.innerHTML = '{% if current_lang == "am" %}' +
+            '⚠ በስልክ (http://IP) GPS አይሰራም። ካርታ ላይ ፒኑን ይጎትቱ።' +
+            '{% else %}' +
+            '⚠ On phone (http://IP) GPS is blocked. Drag the pin on the map.' +
+            '{% endif %}';
+    } else {
+        gpsStatus.textContent = '{% if current_lang == "am" %}የ GPS ቁልፉን ይጫኑ ወይም ፒኑን ይጎትቱ{% else %}Click the GPS button or drag the pin{% endif %}';
+    }
+
+    const bankSelect = document.getElementById('bank_account_id');
+    const bankDetails = document.getElementById('bankDetails');
+    function showBankDetails() {
+        const opt = bankSelect.options[bankSelect.selectedIndex];
+        if (!opt || !opt.value) {
+            bankDetails.style.display = 'none';
+            return;
+        }
+        document.getElementById('bdBank').textContent = opt.getAttribute('data-bank') || opt.text;
+        document.getElementById('bdName').textContent = opt.getAttribute('data-name') || '';
+        document.getElementById('bdNumber').textContent = opt.getAttribute('data-number') || '';
+        bankDetails.style.display = 'block';
+    }
+    if (bankSelect) {
+        bankSelect.addEventListener('change', showBankDetails);
+    }
+    const copyBtn = document.getElementById('copyAcc');
+    if (copyBtn) {
+        copyBtn.addEventListener('click', function () {
+            const num = document.getElementById('bdNumber').textContent;
+            if (num && navigator.clipboard) {
+                navigator.clipboard.writeText(num);
+                if (typeof showToast === 'function') showToast('{% if current_lang == "am" %}አካውንት ቁጥር ተቀድቷል{% else %}Account number copied{% endif %}');
+            }
+        });
+    }
+
+    document.getElementById('checkoutForm').addEventListener('submit', async function (e) {
+        e.preventDefault();
+        const btn = document.getElementById('submitOrderBtn');
+        if (btn.disabled) return;
+
+        // ---- every check happens BEFORE the button is disabled, so it can never get stuck ----
+        const phone = document.getElementById('phone').value.trim();
+        if (!phone) { showToast('{% if current_lang == "am" %}ስልክ ያስፈልጋል{% else %}Phone required{% endif %}', 'error'); return; }
+        if (!latInput.value || !lngInput.value || !locationConfirmed) {
+            showToast('{% if current_lang == "am" %}እባክዎ ትክክለኛ ቦታዎን በካርታ ያስቀምጡ{% else %}Please set your exact location on the map{% endif %}', 'error');
+            return;
+        }
+        if (needPay) {
+            const bank = document.getElementById('bank_account_id');
+            const tx = document.getElementById('transaction_id').value.trim();
+            const file = document.getElementById('receipt').files[0];
+            if (!bank || !bank.value) { showToast('{% if current_lang == "am" %}የባንክ አይነት ይምረጡ{% else %}Select bank type{% endif %}', 'error'); return; }
+            if (!tx && !file) {
+                showToast('{% if current_lang == "am" %}ትራንዛክሽን ID ወይም ደረሰኝ ያስፈልጋል{% else %}Transaction ID or receipt required{% endif %}', 'error');
+                return;
+            }
+        }
+
+        // Stable key for this submit attempt (prevents double order on network retry)
+        // The key is kept in localStorage (not just in memory): if the page is refreshed or closed
+        // while the order is being sent, the next page load can ask the server whether the order
+        // was created (see recoverCheckout in app.js) and the same key can never create a second order.
+        const cartSig = JSON.stringify(cart.map(function (i) { return [i.variant_id, i.quantity]; }));
+        let pend = null;
+        try { pend = JSON.parse(localStorage.getItem('afta_checkout_pending') || 'null'); } catch (e) {}
+        if (!pend || !pend.key || pend.sig !== cartSig || (Date.now() - (pend.ts || 0)) > 24 * 3600 * 1000) {
+            pend = {
+                key: (crypto.randomUUID ? crypto.randomUUID() :
+                      (Date.now().toString(36) + Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2))),
+                sig: cartSig, ts: Date.now()
+            };
+        }
+        try { localStorage.setItem('afta_checkout_pending', JSON.stringify(pend)); } catch (e) {}
+        window._checkoutIdem = pend.key;
+        const fd = new FormData();
+        fd.append('idempotency_key', window._checkoutIdem);
+        fd.append('cart', JSON.stringify(cart));
+        fd.append('customer_name', document.getElementById('customer_name').value.trim());
+        fd.append('phone', phone);
+        fd.append('address_text', document.getElementById('address_text').value.trim());
+        fd.append('latitude', latInput.value);
+        fd.append('longitude', lngInput.value);
+        fd.append('location_confirmed', locationConfirmed ? '1' : '0');
+        fd.append('location_method', methodInput ? methodInput.value : 'manual');
+        if (locationAccuracy != null) fd.append('location_accuracy_m', String(Math.round(locationAccuracy)));
+        fd.append('notes', '');
+        if (needPay) {
+            const bank = document.getElementById('bank_account_id');
+            if (bank && bank.value) fd.append('bank_account_id', bank.value);
+            fd.append('transaction_id', document.getElementById('transaction_id').value.trim());
+            const file = document.getElementById('receipt').files[0];
+            if (file) fd.append('receipt', file);
+        }
+
+        btn.disabled = true;
+        try {
+            const res = await fetch('{{ url_for("checkout") }}', { method: 'POST', body: fd });
+            const data = await res.json();
+            if (data.code === 'login_required') {
+                window.location.href = data.redirect;   // session ended: log in, then come back here
+                return;
+            }
+            if (data.success) {
+                try { localStorage.removeItem('afta_checkout_pending'); } catch (e) {}
+                clearCart();
+                window.location.href = data.redirect;
+                return;
+            }
+            // The server answered "no": no order was created, so forget this attempt.
+            try { localStorage.removeItem('afta_checkout_pending'); } catch (e) {}
+            if (data.code === 'payment_required') {
+                // The server's total says a bank deposit is required: show the payment box
+                // with fresh prices instead of leaving the customer stuck.
+                forcePay = true;
+                refreshCartPrices(function (fresh) {
+                    cart = fresh;
+                    renderSummary();
+                    paySec.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                });
+            }
+            showToast(data.error || 'Error', 'error');
+            btn.disabled = false;
+        } catch (err) {
+            showToast('{% if current_lang == "am" %}ስህተት ተከስቷል{% else %}Error occurred{% endif %}', 'error');
+            btn.disabled = false;
+        }
+    });
+});
+</script>
+{% endblock %}
