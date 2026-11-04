@@ -17,6 +17,7 @@
 <form method="POST" enctype="multipart/form-data" class="admin-form">
 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="form_type" value="site">
+    <details class="settings-group" open><summary>Shop name, logo &amp; colors</summary>
     <div class="form-row">
         <div class="form-group">
             <label for="site_name">Site Name</label>
@@ -51,7 +52,9 @@
         </div>
     </div>
 
-    <h3>Default Delivery (fallback)</h3>
+    </details>
+
+    <details class="settings-group"><summary>Default Delivery (fallback)</summary>
     <div class="form-row">
         <div class="form-group">
             <label for="delivery_min_hours">Min Hours</label>
@@ -64,7 +67,9 @@
     </div>
     <p class="hint">Per-product delivery times are set on each product. These are site defaults.</p>
 
-    <h3>Help / Support Contacts</h3>
+    </details>
+
+    <details class="settings-group" open><summary>Help / Support Contacts</summary>
     <div class="form-row">
         <div class="form-group">
             <label for="help_phone">Phone</label>
@@ -80,7 +85,9 @@
         </div>
     </div>
 
-    <h3>Chat AI assistant / የ AI እገዛ</h3>
+    </details>
+
+    <details class="settings-group"><summary>Chat AI assistant / የ AI እገዛ</summary>
     <div class="form-group" style="background:#f5f5f5;padding:14px;border-radius:10px;border:1px solid #e0e0e0;">
         <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer;">
             <input type="checkbox" name="ai_chat_enabled" value="1"
@@ -99,7 +106,9 @@
         </label>
     </div>
 
-    <h3>Login / Register Page Appearance</h3>
+    </details>
+
+    <details class="settings-group"><summary>Login / Register Page Appearance</summary>
     <div class="form-row">
         <div class="form-group">
             <label for="auth_logo">Login / Register Logo</label>
@@ -128,7 +137,9 @@
     </div>
 
     
-    <h3>Transporter login page</h3>
+    </details>
+
+    <details class="settings-group"><summary>Transporter login page</summary>
     <div class="form-row">
         <div class="form-group">
             <label for="transporter_logo">Transporter logo image</label>
@@ -148,7 +159,9 @@
         </div>
     </div>
 
-    <h3>Home page message / የመነሻ ገጽ መልእክት</h3>
+    </details>
+
+    <details class="settings-group" open><summary>Home page message / የመነሻ ገጽ መልእክት</summary>
     <p class="hint">The short line shown under the big heading on the home page. Leave both empty to hide it.</p>
     <div class="form-row">
         <div class="form-group">
@@ -161,7 +174,9 @@
         </div>
     </div>
 
-    <h3>Footer Text</h3>
+    </details>
+
+    <details class="settings-group"><summary>Footer Text</summary>
     <div class="form-row">
         <div class="form-group">
             <label for="footer_text_am">Footer (Amharic)</label>
@@ -172,6 +187,31 @@
             <input type="text" id="footer_text_en" name="footer_text_en" value="{{ settings.footer_text_en }}">
         </div>
     </div>
+
+    </details>
+
+    <details class="settings-group" open><summary>🔔 Alerts to your phone (optional)</summary>
+        <p class="hint">The 🔔 bell in this panel always works. To also be told <strong>when the panel is closed</strong>, fill one or both:</p>
+        <div class="form-row">
+            <div class="form-group">
+                <label for="notify_telegram_token">Telegram bot token</label>
+                <input type="password" id="notify_telegram_token" name="notify_telegram_token" autocomplete="off"
+                       placeholder="{% if settings.notify_telegram_token %}saved — leave empty to keep, type - to remove{% else %}123456:ABC...{% endif %}">
+                <small>Create a bot with @BotFather on Telegram and paste its token.</small>
+            </div>
+            <div class="form-group">
+                <label for="notify_telegram_chat">Telegram chat ID</label>
+                <input type="text" id="notify_telegram_chat" name="notify_telegram_chat" maxlength="60" value="{{ settings.notify_telegram_chat or '' }}" placeholder="e.g. 123456789">
+                <small>Send any message to your bot, then ask @userinfobot for your ID.</small>
+            </div>
+            <div class="form-group">
+                <label for="notify_phone">Phone for SMS alerts</label>
+                <input type="text" id="notify_phone" name="notify_phone" maxlength="30" value="{{ settings.notify_phone or '' }}" placeholder="+2519...">
+                <small>Needs a working SMS provider (see README).</small>
+            </div>
+        </div>
+        <p class="hint">After saving, open <a href="{{ url_for('admin_notifications') }}">Notifications</a> and press <em>Send a test</em>.</p>
+    </details>
 
     <div class="form-actions">
         <button type="submit" class="btn btn-primary">Save Settings</button>

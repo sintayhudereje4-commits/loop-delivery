@@ -17,12 +17,13 @@
 
 <div class="table-wrap">
 <table class="admin-table">
-<thead><tr><th>Username</th><th>Status</th><th>Created</th><th>Actions</th></tr></thead>
+<thead><tr><th>Username</th><th>Status</th><th>2-step</th><th>Created</th><th>Actions</th></tr></thead>
 <tbody>
 {% for a in admins %}
 <tr>
     <td>{{ a.username }}{% if a.id == current_user.id %} <small>(you)</small>{% endif %}</td>
     <td>{% if a.is_active is none or a.is_active %}<span class="badge badge-confirmed">active</span>{% else %}<span class="badge badge-cancelled">disabled</span>{% endif %}</td>
+    <td>{% if a.totp_enabled %}<span class="badge badge-confirmed">ON</span>{% else %}<span class="badge badge-cancelled">off</span>{% endif %}</td>
     <td>{{ a.created_at|addis if a.created_at else '' }}</td>
     <td>
         <form method="POST" style="display:inline-flex;gap:6px;flex-wrap:wrap;align-items:center;">
@@ -30,6 +31,9 @@
             <input type="hidden" name="id" value="{{ a.id }}">
             <input type="password" name="password" placeholder="New password (min 8)" minlength="8" autocomplete="new-password" style="padding:6px;border:1px solid #ccc;border-radius:6px;">
             <button type="submit" name="action" value="reset_password" class="btn btn-sm btn-outline">Set password</button>
+            {% if a.totp_enabled and a.id != current_user.id %}
+            <button type="submit" name="action" value="reset_2fa" class="btn btn-sm btn-outline" onclick="return confirm('Clear two-step login for this admin?')">Reset 2-step</button>
+            {% endif %}
             {% if a.id != current_user.id %}
             <button type="submit" name="action" value="toggle" class="btn btn-sm btn-outline">{% if a.is_active is none or a.is_active %}Disable{% else %}Enable{% endif %}</button>
             <button type="submit" name="action" value="delete" class="btn btn-sm btn-danger" onclick="return confirm('Delete this admin?')">Delete</button>

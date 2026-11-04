@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Two-step login - Afta Delivery</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/admin.css') }}">
+</head>
+<body class="login-body">
+    <div class="login-card">
+        <h1>Two-step login</h1>
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% for category, message in messages %}<div class="flash flash-{{ category }}">{{ message }}</div>{% endfor %}
+        {% endwith %}
+        <p style="color:#555;font-size:.92rem;margin-top:0;">Open your authenticator app and type the 6-digit code for <strong>Afta Delivery</strong>.
+           Lost your phone? Type one of your 8-character backup codes instead.</p>
+        <form method="POST" autocomplete="off">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div class="form-group">
+                <label for="code">Code</label>
+                <input type="text" id="code" name="code" inputmode="numeric" autocomplete="one-time-code" required autofocus
+                       maxlength="12" placeholder="123456" style="font-size:1.4rem;letter-spacing:5px;text-align:center;">
+            </div>
+            <button type="submit" class="btn btn-primary btn-block">Confirm</button>
+        </form>
+        <p style="text-align:center;margin-top:14px;"><a href="{{ url_for('admin_login') }}">← Back</a></p>
+    </div>
+</body>
+</html>

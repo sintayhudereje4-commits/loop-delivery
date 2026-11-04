@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}{% if current_lang == 'am' %}ከእኛ ጋር ይሽጡ{% else %}Sell with us{% endif %} - {{ settings.site_name }}{% endblock %}
+{% block content %}
+<section class="help-section">
+    <div class="container">
+        <h1>{% if current_lang == 'am' %}ዕቃዎን ከእኛ ጋር ይሽጡ{% else %}Sell your goods with us{% endif %}</h1>
+        <p class="help-intro">
+            {% if current_lang == 'am' %}
+                ነጋዴ ነዎት? ዕቃዎን በ{{ settings.site_name }} እናሳውቅልዎታለን፤ ደንበኞችን እናገኛለን፣ እናደርሳለን። መረጃዎን ይሙሉ፤ ቡድናችን ይደውልልዎታል።
+            {% else %}
+                Are you a trader? We list your goods on {{ settings.site_name }}, find the customers and deliver. Fill in your details and our team will call you.
+            {% endif %}
+        </p>
+        <div class="help-form-wrap" style="max-width:560px;">
+            <form method="POST" action="{{ url_for('sell_with_us') }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <div style="position:absolute;left:-9999px;" aria-hidden="true"><input type="text" name="website" tabindex="-1" autocomplete="off"></div>
+                <div class="form-group"><label for="sname">{% if current_lang == 'am' %}ስም{% else %}Your name{% endif %} *</label>
+                    <input type="text" id="sname" name="name" required maxlength="120"></div>
+                <div class="form-group"><label for="sphone">{% if current_lang == 'am' %}ስልክ ቁጥር{% else %}Phone number{% endif %} *</label>
+                    <input type="tel" id="sphone" name="phone" required maxlength="30"></div>
+                <div class="form-group"><label for="sloc">{% if current_lang == 'am' %}አድራሻ / ከተማ{% else %}Location / city{% endif %}</label>
+                    <input type="text" id="sloc" name="location" maxlength="200"></div>
+                <div class="form-group"><label for="sgoods">{% if current_lang == 'am' %}የሚሸጡት ዕቃ (አይነት፣ መጠን፣ ዋጋ){% else %}What do you sell? (type, quantity, price){% endif %} *</label>
+                    <textarea id="sgoods" name="goods" rows="5" required maxlength="1500"></textarea></div>
+                <button type="submit" class="btn btn-primary">{% if current_lang == 'am' %}ጥያቄ ላክ{% else %}Send request{% endif %}</button>
+            </form>
+        </div>
+    </div>
+</section>
+{% endblock %}

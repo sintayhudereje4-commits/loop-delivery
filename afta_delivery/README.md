@@ -223,3 +223,27 @@ to the order page - no duplicate order and no stale cart.
 Anyone can browse the shop and fill a cart. Pressing *Proceed to Checkout* without being logged in sends the visitor to the
 login page (with a Register link); after logging in or registering they land on checkout again with the cart kept
 (the cart lives in the browser). The search bar is shown on the home page only.
+
+## Admin notifications (🔔)
+Every admin page polls for news. You get a bell number, an on-screen pop-up, a sound and (after pressing *Turn on desktop alerts*)
+a browser notification for: new order, new chat / chat message, new support request, new customer, payment receipt sent,
+transporter problem / hand-back and new merchant request. Messages from the same chat are merged into one.
+To be told while the site is closed, fill *Admin → Settings → Alerts to your phone*: a Telegram bot token + chat ID (free,
+recommended) and/or a phone number for SMS (needs the SMS provider). `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ADMIN_CHAT_ID` and
+`ADMIN_NOTIFY_PHONE` environment variables work too. Use *Notifications → Send a test* to check.
+
+## Merchants (traders)
+Admin → *Merchants*: add a trader (commission %, payout account), list their goods (*Products → Merchant*), and the shop keeps the
+commission on every DELIVERED sale. Each merchant page shows products, stock, sales, what you owe, payments you made, and a CSV
+statement. A commission change only affects new orders. Pausing a merchant hides their products. Optional "Sold by …" on product pages.
+Traders can also ask to join on the public page `/sell` ("Sell with us" in the footer); requests appear under Merchants.
+
+## Simpler admin
+Menu grouped (Shop / Money & delivery / More); the dashboard shows only what needs attention, today's numbers, low stock and the
+latest orders (everything else is under "More numbers"); Settings sections are collapsible.
+
+## Security
+See `SECURITY.md`. New: admin **two-step login** (authenticator app, backup codes, optional `REQUIRE_ADMIN_2FA=1`), alerts for new-place
+admin logins / failed-login bursts / 2-step changes (bell + Telegram/SMS), a live **Security** page in the admin, bounded dependency
+versions and `pip-audit` advice, extra CSP rules (`object-src 'none'`, `base-uri`, `form-action`). Lost phone: another admin uses
+*Admin accounts → Reset 2-step*, or `flask --app app reset-admin` on the server.

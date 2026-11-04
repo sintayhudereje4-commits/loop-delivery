@@ -1,0 +1,75 @@
+{% extends "admin/base_admin.html" %}
+{% block title %}Security{% endblock %}
+{% block content %}
+<div class="page-header"><h1>🔐 Security</h1></div>
+
+{% if new_codes %}
+<div class="detail-card" style="border-left:5px solid #e65100;background:#fff8e1;margin-bottom:22px;">
+    <h3>Your backup codes — save them NOW</h3>
+    <p>Each code works <strong>once</strong>, if you lose your phone. They will not be shown again. Write them down or keep them in a password manager.</p>
+    <div style="font-family:monospace;font-size:1.25rem;line-height:1.9;background:#fff;border:1px dashed #bbb;border-radius:8px;padding:12px 18px;display:inline-block;">
+        {% for c in new_codes %}{{ c }}<br>{% endfor %}
+    </div>
+</div>
+{% endif %}
+
+<div class="detail-card" style="margin-bottom:22px;">
+    <h3>Two-step login (authenticator app)</h3>
+    {% if me.totp_enabled %}
+        <p style="color:#2e7d32;font-weight:700;">✓ ON for your account ({{ me.username }}). {{ backup_left }} backup code(s) left.</p>
+        <p style="color:#555;">At login you type your password and then the 6-digit code from your phone. A stolen password alone can no longer open the admin.</p>
+        <details class="settings-group">
+            <summary>New backup codes</summary>
+            <form method="POST" class="admin-form" style="padding-bottom:14px;">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="new_backup">
+                <div class="form-group"><label>Your password</label><input type="password" name="password" required autocomplete="current-password"></div>
+                <button class="btn btn-outline" type="submit">Create new backup codes</button>
+            </form>
+        </details>
+        <details class="settings-group">
+            <summary>Turn it off</summary>
+            <form method="POST" class="admin-form" style="padding-bottom:14px;">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="disable">
+                <div class="form-row">
+                    <div class="form-group"><label>Your password</label><input type="password" name="password" required autocomplete="current-password"></div>
+                    <div class="form-group"><label>Current code (or a backup code)</label><input type="text" name="code" required autocomplete="off" inputmode="numeric"></div>
+                </div>
+                <button class="btn btn-danger" type="submit" {% if required %}disabled title="The server requires two-step login"{% endif %}>Turn off</button>
+            </form>
+        </details>
+    {% elif secret %}
+        <p><strong>Step 1.</strong> Install an authenticator app on your phone (Google Authenticator, Microsoft Authenticator, Aegis …).</p>
+        <p><strong>Step 2.</strong> In the app choose <em>Add account → Enter a setup key</em> and type:</p>
+        <p style="font-family:monospace;font-size:1.35rem;background:#f1f8f2;display:inline-block;padding:10px 16px;border-radius:8px;letter-spacing:2px;">{{ secret_fmt }}</p>
+        <p style="font-size:.85rem;color:#555;">Account name: {{ me.username }} · Type: time-based · On a phone you can also tap
+            <a href="{{ uri }}">this link</a> to open your authenticator app directly.</p>
+        <p><strong>Step 3.</strong> Type the 6-digit code the app shows:</p>
+        <form method="POST" class="admin-form" style="max-width:360px;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="confirm">
+            <div class="form-group"><input type="text" name="code" required inputmode="numeric" autocomplete="off" maxlength="8" placeholder="123456"
+                   style="font-size:1.3rem;letter-spacing:4px;text-align:center;"></div>
+            <button class="btn btn-primary" type="submit">Turn on</button>
+        </form>
+    {% else %}
+        <p style="color:#e65100;font-weight:700;">Not turned on.</p>
+        <p>Strongly recommended: the admin panel controls money, customer data and orders. With two-step login a stolen or guessed password is not enough.</p>
+        <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="start">
+            <button class="btn btn-primary" type="submit">Set up two-step login</button></form>
+    {% endif %}
+    {% if required %}<p style="margin-top:10px;color:#555;font-size:.85rem;">The server rule <code>REQUIRE_ADMIN_2FA</code> is ON: every admin must use two-step login.</p>{% endif %}
+</div>
+
+<h2>Safety check</h2>
+<div class="table-wrap">
+<table class="admin-table">
+<thead><tr><th style="width:44px;"></th><th>What</th><th>What to do</th></tr></thead>
+<tbody>
+{% for ok, what, fix in checks %}
+<tr><td style="font-size:1.2rem;">{{ '✅' if ok else '⚠️' }}</td><td>{{ what }}</td><td style="color:#555;">{% if not ok %}{{ fix }}{% endif %}</td></tr>
+{% endfor %}
+</tbody>
+</table>
+</div>
+<p class="hint">Lost phone and no backup codes? Another admin can clear your two-step login on the <a href="{{ url_for('admin_admins') }}">Admin accounts</a> page,
+or on the server run <code>flask --app app reset-admin</code>.</p>
+{% endblock %}

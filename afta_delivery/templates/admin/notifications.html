@@ -1,0 +1,34 @@
+{% extends "admin/base_admin.html" %}
+{% block title %}Notifications{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>🔔 Notifications</h1>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <form method="POST" action="{{ url_for('admin_notifications_read_all') }}"><button class="btn btn-outline" type="submit">Mark all as read</button></form>
+        <form method="POST" action="{{ url_for('admin_notifications_test') }}"><button class="btn btn-outline" type="submit">Send a test</button></form>
+    </div>
+</div>
+<p class="hint">You get a notification when a customer orders, writes to support or chat, registers, sends a payment receipt,
+when a transporter reports a problem and when a merchant asks to sell with you. The number next to 🔔 shows what you have not opened yet.</p>
+
+<div class="detail-card" style="margin-bottom:18px;">
+    <strong>Alerts when this page is closed</strong>
+    <ul style="margin:8px 0 0;padding-left:18px;">
+        <li>Desktop pop-up + sound: use <em>Turn on desktop alerts</em> in the left menu (works while the admin tab stays open).</li>
+        <li>On your phone even when the site is closed: set a <strong>Telegram</strong> bot or your <strong>phone number (SMS)</strong> in
+            <a href="{{ url_for('admin_settings') }}">Settings → Alerts</a>.
+            {% if outside %}<span style="color:#2e7d32;font-weight:700;">✓ Outside alerts are ON.</span>{% else %}<span style="color:#e65100;">Not set up yet.</span>{% endif %}</li>
+    </ul>
+</div>
+
+{% for n in rows %}
+<a class="notif {% if not n.is_read %}unread{% endif %}" href="{{ url_for('admin_notification_go', nid=n.id) }}">
+    <div class="t">{{ {'order':'🛒','chat':'💬','support':'🆘','customer':'👤','payment':'💳','issue':'⚠️','merchant':'🏪','security':'🔐'}.get(n.kind, '🔔') }}
+        {{ n.title }}{% if n.count and n.count > 1 %} <small>(×{{ n.count }})</small>{% endif %}</div>
+    {% if n.body %}<div class="b">{{ n.body }}</div>{% endif %}
+    <div class="w">{{ n.updated_at|addis }}</div>
+</a>
+{% else %}
+<p>Nothing yet. New orders, messages and sign-ups will appear here.</p>
+{% endfor %}
+{% endblock %}

@@ -13,19 +13,33 @@
             <a href="{{ url_for('admin_dashboard') }}">Afta Admin</a>
         </div>
         <nav class="sidebar-nav">
-            <a href="{{ url_for('admin_dashboard') }}" class="nav-item {% if request.endpoint == 'admin_dashboard' %}active{% endif %}">Dashboard</a>
-            <a href="{{ url_for('admin_products') }}" class="nav-item {% if 'product' in request.endpoint %}active{% endif %}">Products</a>
-            <a href="{{ url_for('admin_categories') }}" class="nav-item {% if request.endpoint == 'admin_categories' %}active{% endif %}">Categories</a>
-            <a href="{{ url_for('admin_orders') }}" class="nav-item {% if 'order' in request.endpoint %}active{% endif %}">Orders</a>
-            <a href="{{ url_for('admin_customers') }}" class="nav-item {% if request.endpoint == 'admin_customers' %}active{% endif %}">Customers</a>
-            <a href="{{ url_for('admin_banks') }}" class="nav-item {% if request.endpoint == 'admin_banks' %}active{% endif %}">Banks</a>
-            <a href="{{ url_for('admin_transporters') }}" class="nav-item {% if request.endpoint == 'admin_transporters' %}active{% endif %}">Transporters</a>
-            <a href="{{ url_for('admin_support') }}" class="nav-item {% if 'support' in request.endpoint %}active{% endif %}">Support</a>
-            <a href="{{ url_for('admin_vat_delivery') }}" class="nav-item {% if request.endpoint == 'admin_vat_delivery' %}active{% endif %}">VAT &amp; Delivery</a>
-            <a href="{{ url_for('admin_bank_ledger') }}" class="nav-item {% if request.endpoint in ('admin_bank_ledger',) %}active{% endif %}">Money received</a>
-            <a href="{{ url_for('admin_admins') }}" class="nav-item {% if request.endpoint == 'admin_admins' %}active{% endif %}">Admins</a>
-            <a href="{{ url_for('admin_audit') }}" class="nav-item {% if request.endpoint == 'admin_audit' %}active{% endif %}">Audit log</a>
-            <a href="{{ url_for('admin_settings') }}" class="nav-item {% if request.endpoint == 'admin_settings' %}active{% endif %}">Settings</a>
+            {% set ep = request.endpoint or '' %}
+            <a href="{{ url_for('admin_dashboard') }}" class="nav-item {% if ep == 'admin_dashboard' %}active{% endif %}">Dashboard</a>
+            <a href="{{ url_for('admin_notifications') }}" class="nav-item {% if ep == 'admin_notifications' %}active{% endif %}">🔔 Notifications <span class="nav-badge" id="navBellCount" {% if not admin_unread_count() %}hidden{% endif %}>{{ admin_unread_count() }}</span></a>
+            <button type="button" id="enableAlerts" class="enable-alerts" hidden>Turn on desktop alerts</button>
+            <a href="{{ url_for('admin_orders') }}" class="nav-item {% if 'order' in ep %}active{% endif %}">Orders</a>
+            <a href="{{ url_for('admin_support') }}" class="nav-item {% if 'support' in ep or 'chat' in ep %}active{% endif %}">Support</a>
+
+            <div class="nav-group">Shop</div>
+            <a href="{{ url_for('admin_products') }}" class="nav-item {% if 'product' in ep %}active{% endif %}">Products</a>
+            <a href="{{ url_for('admin_vendors') }}" class="nav-item {% if 'vendor' in ep %}active{% endif %}">Merchants</a>
+            <a href="{{ url_for('admin_categories') }}" class="nav-item {% if ep == 'admin_categories' %}active{% endif %}">Categories</a>
+            <a href="{{ url_for('admin_customers') }}" class="nav-item {% if ep == 'admin_customers' %}active{% endif %}">Customers</a>
+
+            <div class="nav-group">Money &amp; delivery</div>
+            <a href="{{ url_for('admin_bank_ledger') }}" class="nav-item {% if ep == 'admin_bank_ledger' %}active{% endif %}">Money received</a>
+            <a href="{{ url_for('admin_banks') }}" class="nav-item {% if ep == 'admin_banks' %}active{% endif %}">Bank accounts</a>
+            <a href="{{ url_for('admin_transporters') }}" class="nav-item {% if ep == 'admin_transporters' %}active{% endif %}">Transporters</a>
+
+            <details class="nav-more" {% if ep in ('admin_settings', 'admin_vat_delivery', 'admin_admins', 'admin_audit', 'admin_security') %}open{% endif %}>
+                <summary>More</summary>
+                <a href="{{ url_for('admin_settings') }}" class="nav-item {% if ep == 'admin_settings' %}active{% endif %}">Settings</a>
+                <a href="{{ url_for('admin_vat_delivery') }}" class="nav-item {% if ep == 'admin_vat_delivery' %}active{% endif %}">VAT &amp; Delivery fee</a>
+                <a href="{{ url_for('admin_security') }}" class="nav-item {% if ep == 'admin_security' %}active{% endif %}">🔐 Security</a>
+                <a href="{{ url_for('admin_admins') }}" class="nav-item {% if ep == 'admin_admins' %}active{% endif %}">Admin accounts</a>
+                <a href="{{ url_for('admin_audit') }}" class="nav-item {% if ep == 'admin_audit' %}active{% endif %}">Change history</a>
+            </details>
+
             <a href="{{ url_for('index') }}" class="nav-item" target="_blank">View Site</a>
             <form method="POST" action="{{ url_for('admin_logout') }}" class="inline-form">
 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="nav-item logout link-btn">Logout</button></form>
@@ -191,6 +205,76 @@
   setTimeout(poll, 600);
   document.addEventListener('visibilitychange', tickLabel);
   tickLabel();
+})();
+</script>
+<div id="toastBox"></div>
+<script>
+/* Notifications: bell number, pop-up and sound on every admin page */
+(function () {
+  var KEY = 'aftaNotifLast';
+  var bell = document.getElementById('navBellCount');
+  var box = document.getElementById('toastBox');
+  var enable = document.getElementById('enableAlerts');
+  var baseTitle = document.title.replace(/^\(\d+\) /, '');
+  var last = -1;
+  try { var v = localStorage.getItem(KEY); if (v !== null) last = parseInt(v, 10); } catch (e) {}
+  if (isNaN(last)) last = -1;
+
+  if (enable && window.Notification && Notification.permission === 'default') {
+    enable.hidden = false;
+    enable.addEventListener('click', function () {
+      Notification.requestPermission().then(function () { enable.hidden = true; });
+    });
+  }
+  function setCount(n) {
+    if (bell) { bell.textContent = n; bell.hidden = !(n > 0); }
+    document.title = (n > 0 ? '(' + n + ') ' : '') + baseTitle;
+  }
+  function beep() {
+    try {
+      var AC = window.AudioContext || window.webkitAudioContext; if (!AC) return;
+      var c = new AC(), o = c.createOscillator(), g = c.createGain();
+      o.connect(g); g.connect(c.destination); o.frequency.value = 880; g.gain.value = 0.08;
+      o.start(); o.stop(c.currentTime + 0.25);
+    } catch (e) {}
+  }
+  function toast(it) {
+    if (!box) return;
+    var a = document.createElement('a'); a.href = it.url;
+    var s = document.createElement('strong'); s.textContent = it.title;
+    var d = document.createElement('span'); d.textContent = it.body || '';
+    a.appendChild(s); a.appendChild(d); box.appendChild(a);
+    setTimeout(function () { a.remove(); }, 9000);
+  }
+  function show(it) {
+    toast(it);
+    if (window.Notification && Notification.permission === 'granted') {
+      try {
+        var n = new Notification(it.title, { body: it.body || '', tag: 'afta-' + it.id });
+        n.onclick = function () { window.focus(); location.href = it.url; };
+      } catch (e) {}
+    }
+  }
+  var busy = false;
+  function poll() {
+    if (busy) return; busy = true;
+    fetch('/admin/api/notifications?after=' + Math.max(last, 0) + '&_=' + Date.now(), { credentials: 'same-origin', cache: 'no-store' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        busy = false; if (!d) return;
+        setCount(d.unread);
+        if (last < 0) { last = d.latest_id; try { localStorage.setItem(KEY, String(last)); } catch (e) {} return; }
+        if (d.items && d.items.length) {
+          d.items.forEach(show); beep();
+          last = d.items[d.items.length - 1].id;
+        } else if (d.latest_id > last) { last = d.latest_id; }
+        try { localStorage.setItem(KEY, String(last)); } catch (e) {}
+      })
+      .catch(function () { busy = false; });
+  }
+  setTimeout(poll, 1200);
+  setInterval(poll, 12000);
+  document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') poll(); });
 })();
 </script>
 </body>

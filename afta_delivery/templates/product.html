@@ -21,6 +21,9 @@
             </div>
             <div class="product-detail-info">
                 <h1>{{ product.name_am if current_lang == 'am' else product.name_en }}</h1>
+                {% if product.vendor and product.vendor.show_name %}
+                <p class="sold-by" style="color:#666;margin:0 0 8px;">{% if current_lang == 'am' %}ሻጭ፦{% else %}Sold by{% endif %} <strong>{{ product.vendor.name }}</strong></p>
+                {% endif %}
                 <p class="desc">{{ product.description_am if current_lang == 'am' else product.description_en }}</p>
 
                 <h3 class="variants-title">{% if current_lang == 'am' %}መጠን ይምረጡ{% else %}Select Size{% endif %}</h3>

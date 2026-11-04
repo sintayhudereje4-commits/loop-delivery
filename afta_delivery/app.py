@@ -11,6 +11,8 @@ import json
 import math
 import time
 import hmac
+import struct
+import hashlib
 import shutil
 import secrets
 from contextlib import contextmanager
@@ -682,6 +684,7 @@ def security_headers(resp):
         "https://*.arcgisonline.com https://server.arcgisonline.com "
         "https://*.tile.openstreetmap.org "
         "https://*.mapbox.com https://api.mapbox.com; "
+        "object-src 'none'; base-uri 'self'; form-action 'self'; "
         "frame-ancestors 'self'"
     )
     return resp
@@ -695,6 +698,12 @@ class Admin(UserMixin, db.Model):
     username = db.Column(db.String(80), unique=True, nullable=False)
     password_hash = db.Column(db.String(256), nullable=False)
     is_active = db.Column(db.Boolean, default=True)
+    # Two-step login (authenticator app). The secret is kept even before it is confirmed.
+    totp_secret = db.Column(db.String(64), nullable=True)
+    totp_enabled = db.Column(db.Boolean, default=False)
+    totp_last_step = db.Column(db.Integer, default=0)      # a code can be used only once
+    backup_codes = db.Column(db.Text, default='')           # JSON list of HASHED one-time codes
+    last_login_ip = db.Column(db.String(64), default='')
     created_at = db.Column(db.DateTime, default=utcnow)
 
     def set_password(self, password):
@@ -721,6 +730,10 @@ class SiteSettings(db.Model):
     # Short line under the big heading on the home page (edited by the admin in Settings). Empty = hidden.
     hero_tagline_am = db.Column(db.Text, default='')
     hero_tagline_en = db.Column(db.Text, default='')
+    # Optional outside alerts for the admin (also work when the admin panel is closed)
+    notify_telegram_token = db.Column(db.String(120), default='')
+    notify_telegram_chat = db.Column(db.String(60), default='')
+    notify_phone = db.Column(db.String(30), default='')
     # When True, chat AI replies if admin has not answered recently. Default off.
     ai_chat_enabled = db.Column(db.Boolean, default=False)
     # Flat delivery / transport fee (ETB). Managed under Admin → VAT & Delivery.
@@ -774,8 +787,10 @@ class Product(db.Model):
     sort_order = db.Column(db.Integer, default=0)
     delivery_min_hours = db.Column(db.Integer, default=2)
     delivery_max_hours = db.Column(db.Integer, default=6)
+    vendor_id = db.Column(db.Integer, db.ForeignKey('vendor.id'), nullable=True, index=True)  # merchant who owns the goods
     created_at = db.Column(db.DateTime, default=utcnow)
     updated_at = db.Column(db.DateTime, default=utcnow, onupdate=utcnow)
+    vendor = db.relationship('Vendor', backref='products', lazy=True)
     variants = db.relationship('ProductVariant', backref='product', lazy=True, cascade='all, delete-orphan')
 
 
@@ -929,6 +944,9 @@ class OrderItem(db.Model):
     unit_price = db.Column(db.Float, nullable=False)
     quantity = db.Column(db.Integer, default=1)
     subtotal = db.Column(db.Float, nullable=False)
+    # who owned the goods and the commission rate AT THE TIME OF THE ORDER (history never changes)
+    vendor_id = db.Column(db.Integer, nullable=True, index=True)
+    commission_percent = db.Column(db.Float, default=0.0)
 
 
 
@@ -966,6 +984,57 @@ class BankTransaction(db.Model):
     note = db.Column(db.String(255), default='')
     actor = db.Column(db.String(80), default='')
     voided = db.Column(db.Boolean, default=False)
+    created_at = db.Column(db.DateTime, default=utcnow, index=True)
+
+
+class AdminNotification(db.Model):
+    """Something the admin should look at (new order, chat message, new customer ...)."""
+    id = db.Column(db.Integer, primary_key=True)
+    kind = db.Column(db.String(20), default='info', index=True)   # order | chat | support | customer | payment | issue | merchant
+    title = db.Column(db.String(160), default='')
+    body = db.Column(db.String(300), default='')
+    url = db.Column(db.String(200), default='')
+    ref_key = db.Column(db.String(60), nullable=True, index=True)  # merges repeats, e.g. chat:12
+    count = db.Column(db.Integer, default=1)
+    is_read = db.Column(db.Boolean, default=False, index=True)
+    created_at = db.Column(db.DateTime, default=utcnow, index=True)
+    updated_at = db.Column(db.DateTime, default=utcnow)
+
+
+class Vendor(db.Model):
+    """A merchant whose goods are sold on the shop (listed and managed by the admin)."""
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(120), nullable=False)
+    phone = db.Column(db.String(30), default='')
+    location = db.Column(db.String(200), default='')
+    commission_percent = db.Column(db.Float, default=10.0)   # the shop keeps this % of every sale
+    payout_info = db.Column(db.String(255), default='')      # bank / telebirr account for paying the merchant
+    notes = db.Column(db.Text, default='')
+    show_name = db.Column(db.Boolean, default=False)         # show "Sold by ..." on the product page
+    is_active = db.Column(db.Boolean, default=True)
+    created_at = db.Column(db.DateTime, default=utcnow)
+
+
+class VendorPayout(db.Model):
+    """Money the shop paid out to a merchant."""
+    id = db.Column(db.Integer, primary_key=True)
+    vendor_id = db.Column(db.Integer, db.ForeignKey('vendor.id'), nullable=False, index=True)
+    amount = db.Column(db.Float, nullable=False)
+    reference = db.Column(db.String(120), default='')
+    note = db.Column(db.String(255), default='')
+    actor = db.Column(db.String(80), default='')
+    voided = db.Column(db.Boolean, default=False)
+    paid_at = db.Column(db.DateTime, default=utcnow, index=True)
+
+
+class VendorApplication(db.Model):
+    """A merchant asking (on the public 'Sell with us' page) to have goods listed."""
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(120), nullable=False)
+    phone = db.Column(db.String(30), nullable=False)
+    location = db.Column(db.String(200), default='')
+    goods = db.Column(db.Text, default='')
+    status = db.Column(db.String(20), default='new', index=True)   # new | done | dismissed
     created_at = db.Column(db.DateTime, default=utcnow, index=True)
 
 
@@ -1319,12 +1388,77 @@ def _send_sms_batch(items):
             app.logger.exception('background SMS failed')
 
 
+def admin_notify(kind, title, body='', url='', ref_key=None):
+    """Tell the admin something happened. Stored in the notification list (bell) and, if configured,
+    also sent to Telegram / SMS after the request succeeds. The caller commits. Never raises."""
+    try:
+        with db.session.no_autoflush:
+            if ref_key:
+                row = AdminNotification.query.filter_by(ref_key=ref_key, is_read=False).first()
+                if row:   # same conversation / order: update the unread one instead of piling up
+                    row.count = (row.count or 1) + 1
+                    row.body = (body or '')[:300]
+                    row.updated_at = utcnow()
+                    return
+            db.session.add(AdminNotification(kind=kind, title=(title or '')[:160], body=(body or '')[:300],
+                                             url=(url or '')[:200], ref_key=ref_key))
+        ext = g.get('_admin_ext')
+        if ext is None:
+            ext = []
+            g._admin_ext = ext
+        ext.append(f'{title}\n{body}'.strip())
+    except Exception:
+        app.logger.exception('admin_notify failed')
+
+
+def _admin_notify_config():
+    """Where outside alerts go: settings (Admin > Settings) first, environment variables as fallback."""
+    try:
+        st = get_settings()
+    except Exception:
+        st = None
+    token = ((getattr(st, 'notify_telegram_token', '') or '') or os.environ.get('TELEGRAM_BOT_TOKEN', '')).strip()
+    chat = ((getattr(st, 'notify_telegram_chat', '') or '') or os.environ.get('TELEGRAM_ADMIN_CHAT_ID', '')).strip()
+    phone = ((getattr(st, 'notify_phone', '') or '') or os.environ.get('ADMIN_NOTIFY_PHONE', '')).strip()
+    cfg = {'token': token, 'chat': chat, 'phone': phone}
+    return cfg if ((token and chat) or phone) else None
+
+
+def _send_admin_batch(cfg, texts, errors=None):
+    """Send outside alerts. If `errors` is a list, failure reasons are appended (used by the test button)."""
+    for text in texts:
+        if cfg.get('token') and cfg.get('chat'):
+            try:
+                data = urlencode({'chat_id': cfg['chat'], 'text': text[:900]}).encode('utf-8')
+                req = urllib.request.Request(f"https://api.telegram.org/bot{cfg['token']}/sendMessage", data=data)
+                urllib.request.urlopen(req, timeout=8).read()
+            except Exception as e:
+                app.logger.warning('Telegram admin alert failed: %s', e)
+                if errors is not None:
+                    errors.append('Telegram: check the bot token and chat ID (and send your bot a message first)')
+        if cfg.get('phone'):
+            if sms_provider_name() in ('twilio', 'africastalking', 'http'):
+                try:
+                    send_sms(cfg['phone'], text.replace('\n', ' ')[:150])
+                except Exception as e:
+                    app.logger.warning('SMS admin alert failed: %s', e)
+                    if errors is not None:
+                        errors.append('SMS: the SMS provider refused the message')
+            elif errors is not None:
+                errors.append('SMS: no SMS provider is configured on the server')
+
+
 @app.after_request
 def flush_sms_queue(resp):
     try:
         queue = g.pop('_sms_queue', None)
         if queue and resp.status_code < 400:
             threading.Thread(target=_send_sms_batch, args=(list(queue),), daemon=True).start()
+        ext = g.pop('_admin_ext', None)
+        if ext and resp.status_code < 400:
+            cfg = _admin_notify_config()
+            if cfg:
+                threading.Thread(target=_send_admin_batch, args=(cfg, list(ext)), daemon=True).start()
     except Exception:
         app.logger.exception('flush_sms_queue failed')
     return resp
@@ -1618,6 +1752,92 @@ def get_current_transporter():
     return None
 
 
+# ---------------------------------------------------------------------------
+# Two-step login (TOTP, RFC 6238 - works with Google Authenticator, Microsoft Authenticator, Aegis, ...)
+# ---------------------------------------------------------------------------
+def totp_new_secret():
+    return base64.b32encode(os.urandom(20)).decode('ascii').rstrip('=')
+
+
+def _totp_code_at(secret, step):
+    key = base64.b32decode(secret + '=' * (-len(secret) % 8), casefold=True)
+    digest = hmac.new(key, struct.pack('>Q', step), hashlib.sha1).digest()
+    offset = digest[-1] & 0x0F
+    value = (struct.unpack('>I', digest[offset:offset + 4])[0] & 0x7FFFFFFF) % 1000000
+    return f'{value:06d}'
+
+
+def totp_verify(admin, code, remember_step=True):
+    """True if `code` is the current (±30 s) code. A code that was already used is refused."""
+    code = re.sub(r'\D', '', code or '')
+    if len(code) != 6 or not admin.totp_secret:
+        return False
+    now_step = int(time.time() // 30)
+    for step in (now_step - 1, now_step, now_step + 1):
+        if step > (admin.totp_last_step or 0) and hmac.compare_digest(_totp_code_at(admin.totp_secret, step), code):
+            if remember_step:
+                admin.totp_last_step = step
+            return True
+    return False
+
+
+def totp_uri(admin):
+    label = f'{get_settings().site_name or "Afta Delivery"}:{admin.username}'
+    issuer = (get_settings().site_name or 'Afta Delivery')
+    from urllib.parse import quote
+    return f'otpauth://totp/{quote(label)}?secret={admin.totp_secret}&issuer={quote(issuer)}&digits=6&period=30'
+
+
+def _norm_backup(code):
+    return re.sub(r'[^0-9a-f]', '', (code or '').lower())
+
+
+def make_backup_codes(admin, count=8):
+    """Create fresh one-time codes; only their hashes are stored. Returns the plain codes (shown once)."""
+    plain = []
+    hashed = []
+    for _i in range(count):
+        raw = secrets.token_hex(4)
+        plain.append(f'{raw[:4]}-{raw[4:]}')
+        hashed.append(generate_password_hash(raw, method='pbkdf2:sha256:100000'))
+    admin.backup_codes = json.dumps(hashed)
+    return plain
+
+
+def use_backup_code(admin, code):
+    raw = _norm_backup(code)
+    if len(raw) != 8:
+        return False
+    try:
+        hashed = json.loads(admin.backup_codes or '[]')
+    except ValueError:
+        hashed = []
+    for h in list(hashed):
+        if check_password_hash(h, raw):
+            hashed.remove(h)
+            admin.backup_codes = json.dumps(hashed)
+            return True
+    return False
+
+
+def audit_as(actor, action, detail=''):
+    """Audit entry for events where nobody is logged in (yet). The caller commits."""
+    db.session.add(AuditLog(actor=(actor or '')[:80], action=(action or '')[:60], detail=(detail or '')[:500]))
+
+
+def security_alert(title, body='', ref_key=None):
+    """Bell + (if configured) Telegram/SMS for security events such as failed or new-place admin logins."""
+    try:
+        admin_notify('security', title, body, url_for('admin_audit'), ref_key=ref_key)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+
+def _ua_short():
+    return (request.headers.get('User-Agent') or '')[:80]
+
+
 def admin_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -1627,6 +1847,11 @@ def admin_required(f):
         if not isinstance(current_user, Admin) or current_user.is_active is False:
             logout_user()
             return redirect(url_for('admin_login', next=request.path))
+        # Optional rule: every admin must have two-step login (REQUIRE_ADMIN_2FA=1)
+        if (os.environ.get('REQUIRE_ADMIN_2FA') or '').strip().lower() in ('1', 'true', 'yes', 'on') \
+                and not current_user.totp_enabled and request.endpoint not in ('admin_security', 'admin_logout'):
+            flash(tx('ለደህንነት ሲባል መጀመሪያ ባለ ሁለት ደረጃ መግቢያን ያብሩ።', 'For safety, please turn on two-step login first.'), 'error')
+            return redirect(url_for('admin_security'))
         return f(*args, **kwargs)
     return decorated
 
@@ -1690,6 +1915,10 @@ def periodic_sweep():
     _last_sweep[0] = now
     try:
         release_stale_unpaid_orders()
+        AdminNotification.query.filter(AdminNotification.is_read == True,
+                                       AdminNotification.updated_at < utcnow() - timedelta(days=60)) \
+            .delete(synchronize_session=False)
+        db.session.commit()
     except Exception:
         db.session.rollback()
         app.logger.exception('periodic sweep failed')
@@ -2169,8 +2398,11 @@ def checkout():
                 db.session.rollback()
                 delete_stored_file(receipt_path)
                 return _json_error(_('Not enough stock: %(name)s', name=label), 409)
+            _vend = db.session.get(Vendor, oi['product'].vendor_id) if oi['product'].vendor_id else None
             db.session.add(OrderItem(
                 order_id=order.id,
+                vendor_id=_vend.id if _vend else None,
+                commission_percent=float(_vend.commission_percent or 0) if _vend else 0.0,
                 product_id=oi['product'].id,
                 variant_id=oi['variant'].id,
                 product_name=(
@@ -2193,6 +2425,13 @@ def checkout():
         app.logger.exception('Checkout failed')
         return _json_error(_('Server error. Please try again.'), 500)
 
+    try:
+        admin_notify('order', f'New order {_short_no(order)}',
+                     f'{order.customer_name or ""} {order.phone} · items {order.total_amount:.0f} ETB · needs delivery fee'.strip(),
+                     url_for('admin_order_detail', oid=order.id), ref_key=None)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
     rate_hit(f'checkout:{client_ip()}')
     # remember for cart "Pending" display
     pending = session.get('pending_orders', [])
@@ -2321,6 +2560,7 @@ def help_page():
             return redirect(url_for('help_page'))
         req = SupportRequest(name=name, phone=phone, message=message)
         db.session.add(req)
+        admin_notify('support', 'New support request', f'{name} {phone}: {message[:110]}', url_for('admin_support'))
         db.session.commit()
         flash(_('Your request has been submitted. We will contact you soon.'), 'success')
         return redirect(url_for('help_page'))
@@ -2508,6 +2748,7 @@ def chat_send():
         session_key = os.urandom(16).hex()
 
     chat = ChatSession.query.filter_by(session_key=session_key).first()
+    new_chat = chat is None
     if chat:
         # rate limit: max 30 visitor messages per chat per hour
         recent_count = ChatMessage.query.filter_by(session_id=chat.id, sender='visitor').filter(
@@ -2551,6 +2792,9 @@ def chat_send():
                 'created_at': to_addis(ai_msg.created_at or utcnow()).strftime('%H:%M')
             }
     chat.updated_at = utcnow()
+    admin_notify('chat', 'New chat started' if new_chat else 'New chat message',
+                 f'{chat.visitor_name or chat.visitor_phone or "Visitor"}: {message[:110]}',
+                 url_for('admin_chat_detail', cid=chat.id), ref_key=f'chat:{chat.id}')
     db.session.commit()
 
     return jsonify({
@@ -2630,6 +2874,11 @@ def register():
         start_fresh_session(customer_id=c.id)
         session.permanent = True
         attach_guest_orders_to_customer(c)
+        try:
+            admin_notify('customer', 'New customer registered', f'{c.name} · {c.phone}', url_for('admin_customers'))
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
         flash(_('Account created successfully'), 'success')
         return redirect_after_auth()
     return render_template('auth/register.html', otp_on=otp_enabled())
@@ -2686,6 +2935,11 @@ def register_verify():
         start_fresh_session(customer_id=c.id)
         session.permanent = True
         attach_guest_orders_to_customer(c)
+        try:
+            admin_notify('customer', 'New customer registered', f'{c.name} · {c.phone}', url_for('admin_customers'))
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
         flash(_('Phone verified. Account created successfully'), 'success')
         return redirect_after_auth()
 
@@ -2924,6 +3178,8 @@ def resubmit_payment(order_number):
         log_order_change(order, 'payment_status', 'rejected', 'pending', actor='customer', note='resubmit')
     except Exception:
         pass
+    admin_notify('payment', f'Payment proof {_short_no(order)}', f'{order.amount_due_now:.0f} ETB to check',
+                 url_for('admin_order_detail', oid=order.id), ref_key=f'pay:{order.id}')
     db.session.commit()
     flash(_('Payment proof sent. We will review it shortly.'), 'success')
     return redirect(url_for('order_success', order_number=order_number))
@@ -3100,6 +3356,8 @@ def transporter_decline(oid):
     order.delivery_issue = f'Declined by {t.name or t.phone}: {reason}'[:255]
     order.delivery_issue_at = utcnow()
     log_order_change(order, 'transporter', t.phone or '', 'unassigned', actor=actor, note=reason)
+    admin_notify('issue', f'Order handed back {_short_no(order)}', order.delivery_issue,
+                 url_for('admin_order_detail', oid=order.id), ref_key=f'issue:{order.id}')
     db.session.commit()
     flash(tx('ትዕዛዙ ለ Admin ተመልሷል።', 'The order was handed back to the admin.'), 'success')
     return redirect(url_for('transporter_dashboard'))
@@ -3126,6 +3384,8 @@ def transporter_report_issue(oid):
     order.delivery_issue = text[:255]
     order.delivery_issue_at = utcnow()
     log_order_change(order, 'delivery_issue', '', key, actor=f'transporter:{(t.phone or t.name or str(t.id))}', note=note or en_label)
+    admin_notify('issue', f'Delivery problem {_short_no(order)}', order.delivery_issue,
+                 url_for('admin_order_detail', oid=order.id), ref_key=f'issue:{order.id}')
     db.session.commit()
     flash(tx('ችግሩ ለ Admin ተላልፏል።', 'The problem was reported to the admin.'), 'success')
     return redirect(url_for('transporter_order', oid=oid))
@@ -3229,6 +3489,26 @@ def transporter_delivery_receipt(oid):
 # ---------------------------------------------------------------------------
 # Admin routes
 # ---------------------------------------------------------------------------
+def _finish_admin_login(admin, nxt='', used_2fa=False):
+    """Log the admin in, record it, and alert when it is a new place."""
+    start_fresh_session()
+    login_user(admin, remember=False)
+    ip = client_ip()
+    new_place = bool(admin.last_login_ip) and admin.last_login_ip != ip
+    first_ever = not admin.last_login_ip
+    admin.last_login_ip = ip[:64]
+    audit_as(f'admin:{admin.username}', 'admin_login', f'ip={ip} 2fa={"yes" if used_2fa else "no"} ua={_ua_short()}')
+    if new_place or first_ever:
+        try:
+            admin_notify('security', f'Admin login from a new place: {admin.username}',
+                         f'IP {ip} · {"2-step ✓" if used_2fa else "no 2-step"} · {_ua_short()}', url_for('admin_audit'))
+        except Exception:
+            pass
+    db.session.commit()
+    flash(_('Logged in'), 'success')
+    return redirect(nxt if (nxt and is_safe_path(nxt)) else url_for('admin_dashboard'))
+
+
 @app.route('/admin/login', methods=['GET', 'POST'])
 def admin_login():
     # Always require credentials — if already logged in as admin, still show form
@@ -3246,19 +3526,58 @@ def admin_login():
         ).strip()[:80]
         password = request.form.get('admin_password') or request.form.get('password') or ''
         if login_blocked('admin', username):
+            security_alert('Admin login BLOCKED after repeated failures', f'User "{username}" · IP {client_ip()}', ref_key='adminblock')
             flash(_('Too many failed attempts. Please try again in 15 minutes.'), 'error')
             return render_template('admin/login.html'), 429
         admin = Admin.query.filter_by(username=username).first()
         if admin and admin.is_active is not False and admin.check_password(password):
             login_succeeded('admin', username)
-            nxt = request.args.get('next') or request.form.get('next')
-            start_fresh_session()
-            login_user(admin, remember=False)
-            flash(_('Logged in'), 'success')
-            return redirect(nxt if is_safe_path(nxt) else url_for('admin_dashboard'))
+            nxt = request.args.get('next') or request.form.get('next') or ''
+            if admin.totp_enabled and admin.totp_secret:
+                # password is right - now ask for the 6-digit code before anything else
+                start_fresh_session()
+                session['pending_2fa'] = {'id': admin.id, 'ts': int(time.time()), 'next': nxt if is_safe_path(nxt) else ''}
+                return redirect(url_for('admin_login_2fa'))
+            return _finish_admin_login(admin, nxt, used_2fa=False)
         login_failed('admin', username)
+        security_alert('Failed admin login attempts', f'Last try: "{username}" from IP {client_ip()}', ref_key='adminfail')
         flash(_('Invalid username or password'), 'error')
     return render_template('admin/login.html')
+
+
+@app.route('/admin/login/2fa', methods=['GET', 'POST'])
+def admin_login_2fa():
+    pend = session.get('pending_2fa')
+    if not isinstance(pend, dict) or time.time() - float(pend.get('ts') or 0) > 300:
+        session.pop('pending_2fa', None)
+        flash(tx('ጊዜው አልፏል። እንደገና ይግቡ።', 'That took too long. Please log in again.'), 'error')
+        return redirect(url_for('admin_login'))
+    admin = db.session.get(Admin, pend.get('id'))
+    if not admin or admin.is_active is False or not admin.totp_enabled:
+        session.pop('pending_2fa', None)
+        return redirect(url_for('admin_login'))
+    if request.method == 'POST':
+        if login_blocked('admin2fa', admin.username):
+            security_alert('Admin 2-step code BLOCKED after repeated failures', f'User "{admin.username}" · IP {client_ip()}', ref_key='adminblock')
+            flash(_('Too many failed attempts. Please try again in 15 minutes.'), 'error')
+            return render_template('admin/login_2fa.html'), 429
+        code = request.form.get('code') or ''
+        used_backup = False
+        ok = totp_verify(admin, code)
+        if not ok and use_backup_code(admin, code):
+            ok, used_backup = True, True
+        if ok:
+            login_succeeded('admin2fa', admin.username)
+            session.pop('pending_2fa', None)
+            if used_backup:
+                audit_as(f'admin:{admin.username}', 'admin_backup_code_used', f'ip={client_ip()}')
+                security_alert('A 2-step backup code was used', f'{admin.username} · IP {client_ip()}')
+            return _finish_admin_login(admin, pend.get('next') or '', used_2fa=True)
+        db.session.commit()   # keeps nothing but releases the session cleanly
+        login_failed('admin2fa', admin.username)
+        security_alert('Wrong 2-step code at admin login', f'User "{admin.username}" · IP {client_ip()}', ref_key='admin2fafail')
+        flash(tx('ኮዱ ትክክል አይደለም።', 'That code is not correct.'), 'error')
+    return render_template('admin/login_2fa.html')
 
 
 @app.route('/admin/logout', methods=['POST'])
@@ -3316,6 +3635,7 @@ def admin_dashboard():
                                                 Order.status.notin_(['delivered', 'cancelled'])).count(),
         'awaiting_quote': Order.query.filter(Order.payment_status == 'awaiting_quote',
                                              Order.status == 'pending').count(),
+        'merchant_requests': VendorApplication.query.filter_by(status='new').count(),
         'bank_today': ledger_totals(since=day_start)['net'],
         'bank_30d': ledger_totals(since=now - timedelta(days=30))['net'],
         'bank_all': ledger_totals()['net'],
@@ -3334,6 +3654,7 @@ def admin_dashboard():
                     .order_by(func.sum(OrderItem.subtotal).desc()).limit(5).all())
     return render_template('admin/dashboard.html',
                            storage_warning=storage_warning,
+                           security_hint=not bool(getattr(current_user, 'totp_enabled', False)),
                            stats=stats, low_stock=low_stock, top_products=top_products,
                            low_threshold=low_threshold,
                            total_orders=total_orders,
@@ -3343,6 +3664,87 @@ def admin_dashboard():
                            total_transporters=total_transporters,
                            unassigned_orders=unassigned_orders,
                            recent_orders=recent_orders)
+
+
+def security_checks(me):
+    """[(ok, what, how_to_fix)] - a plain checklist for the Security page."""
+    https = request.is_secure or request.headers.get('X-Forwarded-Proto', '').lower() == 'https'
+    pw_file = os.path.exists(os.path.join(app.instance_path, 'initial_admin_password.txt'))
+    active = Admin.query.filter(or_(Admin.is_active.is_(None), Admin.is_active == True)).all()
+    without = [a.username for a in active if not a.totp_enabled]
+    sqlite = app.config['SQLALCHEMY_DATABASE_URI'].startswith('sqlite')
+    return [
+        (https, 'The site is opened over HTTPS', 'Use https:// (free on Render / Cloudflare). Without it passwords travel in the open.'),
+        (bool(app.config.get('SESSION_COOKIE_SECURE')), 'Login cookie is marked Secure', 'Set SESSION_COOKIE_SECURE=1 in the hosting settings once HTTPS works.'),
+        (bool(os.environ.get('SECRET_KEY', '').strip()), 'SECRET_KEY is set in the hosting settings', 'Add a long random SECRET_KEY there; otherwise the key sits in a file on the server.'),
+        (not pw_file, 'The first-time admin password file is deleted', 'Delete instance/initial_admin_password.txt from the server.'),
+        (bool(me.totp_enabled), 'YOUR two-step login is ON', 'Turn it on below (takes 1 minute).'),
+        (not without, 'Every admin uses two-step login', 'Missing: ' + ', '.join(without) if without else ''),
+        (otp_enabled(), 'Customers confirm their phone with an SMS code', 'Set up an SMS provider (see README) so nobody can register with another person\'s number.'),
+        (not sqlite, 'The database is PostgreSQL (not a single file)', 'Use DATABASE_URL with PostgreSQL and keep daily backups off the server.'),
+        (bool(_admin_notify_config()), 'You get Telegram / SMS alerts about logins and orders', 'Settings → Alerts to your phone.'),
+    ]
+
+
+@app.route('/admin/security', methods=['GET', 'POST'])
+@admin_required
+def admin_security():
+    me = db.session.get(Admin, current_user.id)
+    new_codes = None
+    if request.method == 'POST':
+        action = request.form.get('action', '')
+        guard = login_blocked('admin2fa', me.username)
+        if action == 'start':
+            if not me.totp_enabled:
+                me.totp_secret = totp_new_secret()
+                me.totp_last_step = 0
+                db.session.commit()
+            return redirect(url_for('admin_security'))
+        if action == 'confirm':
+            if guard:
+                flash(_('Too many failed attempts. Please try again in 15 minutes.'), 'error')
+            elif me.totp_secret and not me.totp_enabled and totp_verify(me, request.form.get('code')):
+                me.totp_enabled = True
+                new_codes = make_backup_codes(me)
+                audit('2fa_enabled', me.username)
+                admin_notify('security', f'Two-step login turned ON: {me.username}', f'IP {client_ip()}', url_for('admin_audit'))
+                db.session.commit()
+                flash(tx('ባለ ሁለት ደረጃ መግቢያ በርቷል ✓። የመጠባበቂያ ኮዶችን አሁኑኑ ያስቀምጡ።', 'Two-step login is ON ✓. Save the backup codes now.'), 'success')
+            else:
+                if me.totp_secret:
+                    login_failed('admin2fa', me.username)
+                flash(tx('ኮዱ ትክክል አይደለም። በስልክዎ ላይ ያለውን አዲሱን ባለ 6 አሃዝ ኮድ ያስገቡ።', 'That code is not correct. Enter the current 6-digit code from your phone.'), 'error')
+                return redirect(url_for('admin_security'))
+        elif action in ('disable', 'new_backup'):
+            ok_pw = me.check_password(request.form.get('password') or '')
+            ok_code = True if action == 'new_backup' else (totp_verify(me, request.form.get('code')) or use_backup_code(me, request.form.get('code')))
+            if guard:
+                flash(_('Too many failed attempts. Please try again in 15 minutes.'), 'error')
+            elif not (ok_pw and ok_code and me.totp_enabled):
+                login_failed('admin2fa', me.username)
+                flash(tx('የይለፍ ቃሉ ወይም ኮዱ ትክክል አይደለም።', 'Password or code is not correct.'), 'error')
+            elif action == 'disable':
+                me.totp_enabled = False
+                me.totp_secret = None
+                me.backup_codes = ''
+                me.totp_last_step = 0
+                audit('2fa_disabled', me.username)
+                admin_notify('security', f'Two-step login turned OFF: {me.username}', f'IP {client_ip()}', url_for('admin_audit'))
+                db.session.commit()
+                flash(tx('ባለ ሁለት ደረጃ መግቢያ ጠፍቷል።', 'Two-step login is OFF.'), 'success')
+                return redirect(url_for('admin_security'))
+            else:
+                new_codes = make_backup_codes(me)
+                audit('2fa_backup_codes', me.username)
+                db.session.commit()
+                flash(tx('አዲስ የመጠባበቂያ ኮዶች ተፈጥረዋል፤ አሮጌዎቹ አይሠሩም።', 'New backup codes created; the old ones no longer work.'), 'success')
+    secret = me.totp_secret if (me.totp_secret and not me.totp_enabled) else None
+    return render_template(
+        'admin/security.html', me=me, checks=security_checks(me), new_codes=new_codes,
+        secret=secret, secret_fmt=' '.join(secret[i:i + 4] for i in range(0, len(secret), 4)) if secret else '',
+        uri=totp_uri(me) if secret else '',
+        backup_left=len(json.loads(me.backup_codes or '[]')) if me.totp_enabled else 0,
+        required=(os.environ.get('REQUIRE_ADMIN_2FA') or '').strip().lower() in ('1', 'true', 'yes', 'on'))
 
 
 @app.route('/admin/admins', methods=['GET', 'POST'])
@@ -3392,6 +3794,15 @@ def admin_admins():
                 audit('admin_password_reset', target.username)
                 db.session.commit()
                 flash(tx('የይለፍ ቃል ተቀይሯል።', 'Password changed.'), 'success')
+        elif action == 'reset_2fa':
+            target.totp_enabled = False
+            target.totp_secret = None
+            target.backup_codes = ''
+            target.totp_last_step = 0
+            audit('2fa_reset', target.username)
+            admin_notify('security', f'Two-step login was RESET for {target.username}', f'by {current_user.username} · IP {client_ip()}', url_for('admin_audit'))
+            db.session.commit()
+            flash(tx('የ2-ደረጃ መግቢያው ተጠርጓል፤ ተጠቃሚው እንደገና ማብራት ይችላል።', 'Two-step login cleared; they can set it up again.'), 'success')
         elif action == 'delete':
             if target.id == current_user.id:
                 flash(tx('የራስዎን አካውንት መሰረዝ አይችሉም።', 'You cannot delete your own account.'), 'error')
@@ -3554,6 +3965,9 @@ def cli_reset_admin():
     if a:
         a.set_password(pw)
         a.is_active = True
+        a.totp_enabled = False      # lost phone? this also clears the two-step login
+        a.totp_secret = None
+        a.backup_codes = ''
     else:
         a = Admin(username=username, is_active=True)
         a.set_password(pw)
@@ -3562,6 +3976,269 @@ def cli_reset_admin():
     db.session.commit()
     print(f'Admin "{username}" is ready. New password: {pw}')
     print('Log in and change it in Admin > Settings.')
+
+
+# ---------------------------------------------------------------------------
+# Admin notifications (bell)
+# ---------------------------------------------------------------------------
+@app.template_global()
+def admin_unread_count():
+    try:
+        return AdminNotification.query.filter_by(is_read=False).count()
+    except Exception:
+        db.session.rollback()
+        return 0
+
+
+@app.route('/admin/notifications')
+@admin_required
+def admin_notifications():
+    rows = (AdminNotification.query
+            .order_by(AdminNotification.is_read.asc(), AdminNotification.updated_at.desc())
+            .limit(100).all())
+    st = get_settings()
+    return render_template('admin/notifications.html', rows=rows, outside=bool(_admin_notify_config()), settings=st)
+
+
+@app.route('/admin/notifications/<int:nid>/go')
+@admin_required
+def admin_notification_go(nid):
+    n = db.get_or_404(AdminNotification, nid)
+    n.is_read = True
+    db.session.commit()
+    return redirect(n.url if (n.url and is_safe_path(n.url)) else url_for('admin_notifications'))
+
+
+@app.route('/admin/notifications/read-all', methods=['POST'])
+@admin_required
+def admin_notifications_read_all():
+    AdminNotification.query.filter_by(is_read=False).update({AdminNotification.is_read: True}, synchronize_session=False)
+    db.session.commit()
+    return redirect(url_for('admin_notifications'))
+
+
+@app.route('/admin/notifications/test', methods=['POST'])
+@admin_required
+def admin_notifications_test():
+    db.session.add(AdminNotification(kind='info', title='Test notification',
+                                     body='If you can read this, alerts are working.', url=url_for('admin_notifications')))
+    db.session.commit()
+    cfg = _admin_notify_config()
+    if cfg:
+        problems = []
+        _send_admin_batch(cfg, ['Afta Delivery: test alert - it works!'], errors=problems)
+        if problems:
+            flash(tx('የውጭ መልእክት አልተላከም፦ ', 'Outside message failed: ') + ' · '.join(problems), 'error')
+        else:
+            flash(tx('የሙከራ መልእክት ተልኳል። ስልክዎን ወይም Telegram ን ይመልከቱ።', 'Test message sent. Check your phone / Telegram.'), 'success')
+    else:
+        flash(tx('የሙከራ ማሳወቂያ ተጨምሯል። የውጭ (Telegram/SMS) ማሳወቂያ ገና አልተዋቀረም።',
+                 'Test notification added. Outside alerts (Telegram / SMS) are not set up yet.'), 'success')
+    return redirect(url_for('admin_notifications'))
+
+
+@app.route('/admin/api/notifications')
+@admin_required
+def admin_api_notifications():
+    """Polled by every admin page: bell count + the newest unread items (for desktop pop-ups)."""
+    after = safe_int(request.args.get('after'), 0)
+    unread = AdminNotification.query.filter_by(is_read=False).count()
+    latest = db.session.query(func.max(AdminNotification.id)).scalar() or 0
+    fresh = (AdminNotification.query.filter(AdminNotification.id > after, AdminNotification.is_read == False)
+             .order_by(AdminNotification.id).limit(5).all())
+    resp = jsonify({'unread': unread, 'latest_id': latest,
+                    'items': [{'id': n.id, 'title': n.title, 'body': n.body,
+                               'url': url_for('admin_notification_go', nid=n.id)} for n in fresh]})
+    resp.headers['Cache-Control'] = 'no-store'
+    return resp
+
+
+# ---------------------------------------------------------------------------
+# Merchants (vendors): goods listed by the admin on behalf of traders
+# ---------------------------------------------------------------------------
+def vendor_totals(vendor_id):
+    """All-time money figures for one merchant. Only DELIVERED orders count; delivery fees are not included."""
+    gross, commission, qty = db.session.query(
+        func.coalesce(func.sum(OrderItem.subtotal), 0),
+        func.coalesce(func.sum(OrderItem.subtotal * OrderItem.commission_percent / 100.0), 0),
+        func.coalesce(func.sum(OrderItem.quantity), 0),
+    ).join(Order, OrderItem.order_id == Order.id).filter(
+        OrderItem.vendor_id == vendor_id, Order.status == 'delivered').one()
+    paid = db.session.query(func.coalesce(func.sum(VendorPayout.amount), 0)).filter(
+        VendorPayout.vendor_id == vendor_id, VendorPayout.voided == False).scalar() or 0
+    gross, commission, paid = float(gross or 0), float(commission or 0), float(paid or 0)
+    net = gross - commission
+    return {'gross': gross, 'commission': commission, 'net': net, 'qty': int(qty or 0),
+            'paid': paid, 'balance': net - paid}
+
+
+def _vendor_rows(vendor_id, d_from='', d_to='', limit=300):
+    q = (db.session.query(OrderItem, Order).join(Order, OrderItem.order_id == Order.id)
+         .filter(OrderItem.vendor_id == vendor_id, Order.status == 'delivered')
+         .order_by(Order.updated_at.desc(), OrderItem.id.desc()))
+    since = _addis_day_to_utc(d_from)
+    until = _addis_day_to_utc(d_to, end=True)
+    if since:
+        q = q.filter(Order.updated_at >= since)
+    if until:
+        q = q.filter(Order.updated_at < until)
+    return q.limit(limit).all()
+
+
+@app.route('/admin/vendors', methods=['GET', 'POST'])
+@admin_required
+def admin_vendors():
+    if request.method == 'POST':
+        action = request.form.get('action', '')
+        if action == 'add':
+            name = (request.form.get('name') or '').strip()[:120]
+            if not name:
+                flash(tx('የነጋዴው ስም ያስፈልጋል።', 'Merchant name is required.'), 'error')
+                return redirect(url_for('admin_vendors'))
+            v = Vendor(name=name, phone=(request.form.get('phone') or '').strip()[:30],
+                       location=(request.form.get('location') or '').strip()[:200],
+                       commission_percent=max(0.0, min(90.0, safe_float(request.form.get('commission_percent'), 10.0) or 0.0)),
+                       is_active=True)
+            db.session.add(v)
+            db.session.flush()
+            audit('vendor_add', f'{v.name} {v.phone} commission {v.commission_percent}%')
+            db.session.commit()
+            flash(tx('ነጋዴው ተመዝግቧል። አሁን ምርቶቹን ያስገቡ።', 'Merchant added. Now add their products.'), 'success')
+            return redirect(url_for('admin_vendor_detail', vid=v.id))
+        if action in ('req_convert', 'req_dismiss'):
+            ap = db.session.get(VendorApplication, safe_int(request.form.get('id'), 0))
+            if not ap:
+                flash(tx('አልተገኘም።', 'Not found.'), 'error')
+                return redirect(url_for('admin_vendors'))
+            if action == 'req_dismiss':
+                ap.status = 'dismissed'
+                db.session.commit()
+                return redirect(url_for('admin_vendors'))
+            v = Vendor(name=ap.name, phone=ap.phone, location=ap.location or '', notes=f'Request: {ap.goods}'[:2000],
+                       commission_percent=10.0, is_active=True)
+            db.session.add(v)
+            ap.status = 'done'
+            db.session.flush()
+            audit('vendor_add', f'{v.name} (from request #{ap.id})')
+            db.session.commit()
+            flash(tx('ነጋዴው ተፈጥሯል። ዝርዝሩን ያረጋግጡ።', 'Merchant created from the request. Check the details.'), 'success')
+            return redirect(url_for('admin_vendor_detail', vid=v.id))
+        return redirect(url_for('admin_vendors'))
+    vendors = Vendor.query.order_by(Vendor.is_active.desc(), Vendor.name).all()
+    rows = []
+    for v in vendors:
+        rows.append({'v': v, 't': vendor_totals(v.id),
+                     'products': Product.query.filter_by(vendor_id=v.id).count()})
+    requests_new = VendorApplication.query.filter_by(status='new').order_by(VendorApplication.created_at.desc()).all()
+    return render_template('admin/vendors.html', rows=rows, requests_new=requests_new)
+
+
+@app.route('/admin/vendors/<int:vid>', methods=['GET', 'POST'])
+@admin_required
+def admin_vendor_detail(vid):
+    v = db.get_or_404(Vendor, vid)
+    if request.method == 'POST':
+        action = request.form.get('action', '')
+        if action == 'save':
+            v.name = (request.form.get('name') or v.name).strip()[:120] or v.name
+            v.phone = (request.form.get('phone') or '').strip()[:30]
+            v.location = (request.form.get('location') or '').strip()[:200]
+            new_rate = max(0.0, min(90.0, safe_float(request.form.get('commission_percent'), v.commission_percent) or 0.0))
+            if new_rate != (v.commission_percent or 0):
+                audit('vendor_commission', f'{v.name}: {v.commission_percent}% -> {new_rate}% (applies to NEW orders only)')
+            v.commission_percent = new_rate
+            v.payout_info = (request.form.get('payout_info') or '').strip()[:255]
+            v.notes = (request.form.get('notes') or '').strip()[:2000]
+            v.show_name = bool(request.form.get('show_name'))
+            was_active = v.is_active is not False
+            v.is_active = bool(request.form.get('is_active'))
+            hid = False
+            if was_active and not v.is_active:     # pausing a merchant takes their goods off the shop
+                Product.query.filter_by(vendor_id=v.id).update({Product.is_active: False}, synchronize_session=False)
+                hid = True
+            audit('vendor_edit', f'{v.name} active={v.is_active}')
+            db.session.commit()
+            flash(tx('ተቀምጧል። የኮሚሽን ለውጥ ለአዲስ ትዕዛዞች ብቻ ይሠራል።', 'Saved. A commission change only applies to NEW orders.')
+                  + (tx(' የነጋዴው ምርቶች ከሱቁ ተደብቀዋል።', ' Their products were hidden from the shop.') if hid else ''), 'success')
+        elif action in ('hide_products', 'show_products'):
+            on = action == 'show_products'
+            Product.query.filter_by(vendor_id=v.id).update({Product.is_active: on}, synchronize_session=False)
+            audit('vendor_products', f'{v.name}: products {"shown" if on else "hidden"}')
+            db.session.commit()
+            flash(tx('ተስተካክሏል።', 'Updated.'), 'success')
+        elif action == 'payout':
+            amount = safe_float(request.form.get('amount'), None)
+            if amount is None or not math.isfinite(amount) or amount <= 0 or amount > 1e10:
+                flash(tx('ትክክለኛ መጠን ያስገቡ።', 'Enter a valid amount.'), 'error')
+            else:
+                db.session.add(VendorPayout(vendor_id=v.id, amount=amount,
+                                            reference=(request.form.get('reference') or '').strip()[:120],
+                                            note=(request.form.get('note') or '').strip()[:255], actor=admin_actor()[:80]))
+                audit('vendor_payout', f'{v.name}: {amount:.2f} ETB')
+                db.session.commit()
+                flash(tx('ክፍያው ተመዝግቧል።', 'Payment to merchant recorded.'), 'success')
+        elif action == 'void_payout':
+            po = db.session.get(VendorPayout, safe_int(request.form.get('id'), 0))
+            if po and po.vendor_id == v.id:
+                po.voided = True
+                audit('vendor_payout_void', f'{v.name}: {po.amount:.2f} ETB')
+                db.session.commit()
+                flash(tx('ተሰርዟል።', 'Removed.'), 'success')
+        return redirect(url_for('admin_vendor_detail', vid=v.id))
+    d_from = (request.args.get('from') or '').strip()[:10]
+    d_to = (request.args.get('to') or '').strip()[:10]
+    sales = _vendor_rows(v.id, d_from, d_to, 200)
+    payouts = VendorPayout.query.filter_by(vendor_id=v.id).order_by(VendorPayout.paid_at.desc()).limit(100).all()
+    products = Product.query.filter_by(vendor_id=v.id).order_by(Product.sort_order, Product.id).all()
+    return render_template('admin/vendor_detail.html', v=v, t=vendor_totals(v.id), sales=sales, payouts=payouts,
+                           products=products, d_from=d_from, d_to=d_to)
+
+
+@app.route('/admin/vendors/<int:vid>/statement.csv')
+@admin_required
+def admin_vendor_statement(vid):
+    v = db.get_or_404(Vendor, vid)
+    d_from = (request.args.get('from') or '').strip()[:10]
+    d_to = (request.args.get('to') or '').strip()[:10]
+    buf = StringIO()
+    w = csv.writer(buf)
+    w.writerow(['date_addis', 'order', 'product', 'qty', 'sale_amount', 'commission_percent', 'commission', 'merchant_gets'])
+    for item, order in _vendor_rows(v.id, d_from, d_to, 5000):
+        comm = (item.subtotal or 0) * (item.commission_percent or 0) / 100.0
+        w.writerow([_csv_safe(x) for x in (
+            to_addis(order.updated_at).strftime('%Y-%m-%d %H:%M') if order.updated_at else '', order.order_number,
+            item.product_name, item.quantity, f'{item.subtotal:.2f}', item.commission_percent or 0,
+            f'{comm:.2f}', f'{(item.subtotal or 0) - comm:.2f}')])
+    audit('export_vendor', f'{v.name} {d_from}..{d_to}')
+    db.session.commit()
+    resp = Response('\ufeff' + buf.getvalue(), mimetype='text/csv; charset=utf-8')
+    resp.headers['Content-Disposition'] = f'attachment; filename=merchant_{v.id}_statement.csv'
+    resp.headers['Cache-Control'] = 'private, no-store'
+    return resp
+
+
+@app.route('/sell', methods=['GET', 'POST'])
+def sell_with_us():
+    """Public page where a trader asks to have their goods sold through the shop."""
+    if request.method == 'POST':
+        if (request.form.get('website') or '').strip():      # hidden trap field: bots fill it
+            return redirect(url_for('index'))
+        if rate_exceeded('sell', 5, 3600):
+            flash(tx('ብዙ ጥያቄ ልከዋል። ቆይተው ይሞክሩ።', 'Too many requests. Please try again later.'), 'error')
+            return redirect(url_for('sell_with_us'))
+        name = ' '.join((request.form.get('name') or '').split())[:120]
+        phone = normalize_phone((request.form.get('phone') or '').strip())
+        goods = (request.form.get('goods') or '').strip()[:1500]
+        if not name or not phone or not goods:
+            flash(tx('ስም፣ ትክክለኛ ስልክ ቁጥር እና የሚሸጡትን እቃ ይጻፉ።', 'Please enter your name, a valid phone number and what you sell.'), 'error')
+            return redirect(url_for('sell_with_us'))
+        ap = VendorApplication(name=name, phone=phone, location=' '.join((request.form.get('location') or '').split())[:200], goods=goods)
+        db.session.add(ap)
+        admin_notify('merchant', 'New merchant request', f'{name} {phone}: {goods[:100]}', url_for('admin_vendors'))
+        db.session.commit()
+        flash(tx('ጥያቄዎ ደርሶናል። ቡድናችን በቅርቡ ይደውልልዎታል።', 'We received your request. Our team will call you soon.'), 'success')
+        return redirect(url_for('sell_with_us'))
+    return render_template('sell.html')
 
 
 @app.route('/admin/api/live')
@@ -3677,11 +4354,20 @@ def admin_categories():
 def admin_products():
     categories = Category.query.order_by(Category.sort_order, Category.id).all()
     cat_id = form_int('category', 0, 0, 10**9) or None
+    ven_id = form_int('vendor', 0, 0, 10**9) or None
     q = Product.query
     if cat_id:
         q = q.filter_by(category_id=cat_id)
+    if ven_id:
+        q = q.filter_by(vendor_id=ven_id)
     products = q.order_by(Product.sort_order, Product.id).all()
-    return render_template('admin/products.html', products=products, categories=categories)
+    return render_template('admin/products.html', products=products, categories=categories,
+                           vendors=Vendor.query.order_by(Vendor.name).all(), current_vendor=ven_id)
+
+
+def _read_vendor_id():
+    vid = form_int('vendor_id', 0, 0, 10**9) or None
+    return vid if (vid and db.session.get(Vendor, vid)) else None
 
 
 def _read_delivery_hours():
@@ -3742,7 +4428,8 @@ def admin_product_add():
             is_active=bool(request.form.get('is_active')),
             sort_order=form_int('sort_order', 0, -10000, 10000),
             delivery_min_hours=d_min,
-            delivery_max_hours=d_max
+            delivery_max_hours=d_max,
+            vendor_id=_read_vendor_id()
         )
         _save_product_image(product)
 
@@ -3786,7 +4473,9 @@ def admin_product_add():
         unit_labels=UNIT_LABELS,
         allowed_units=ALLOWED_UNITS,
         categories=categories,
-        preselect_category=preselect_cat
+        preselect_category=preselect_cat,
+        vendors=Vendor.query.filter(or_(Vendor.is_active == True, Vendor.is_active.is_(None))).order_by(Vendor.name).all(),
+        preset_vendor=form_int('vendor', 0, 0, 10**9) or None
     )
 
 
@@ -3806,6 +4495,7 @@ def admin_product_edit(pid):
             cat_id = None
         unit = _read_product_unit()
         product.category_id = cat_id
+        product.vendor_id = _read_vendor_id()
         product.name_am = name_am
         product.name_en = name_en
         product.description_am = request.form.get('description_am', '')
@@ -3873,7 +4563,9 @@ def admin_product_edit(pid):
         unit_presets=UNIT_PRESETS,
         unit_labels=UNIT_LABELS,
         allowed_units=ALLOWED_UNITS,
-        categories=Category.query.order_by(Category.sort_order, Category.id).all()
+        categories=Category.query.order_by(Category.sort_order, Category.id).all(),
+        vendors=Vendor.query.order_by(Vendor.name).all(),
+        preset_vendor=None
     )
 
 
@@ -4520,6 +5212,11 @@ def admin_settings():
         settings.ai_chat_enabled = bool(request.form.get('ai_chat_enabled'))
         settings.footer_text_am = request.form.get('footer_text_am', '')
         settings.footer_text_en = request.form.get('footer_text_en', '')
+        tg_token = (request.form.get('notify_telegram_token') or '').strip()[:120]
+        if tg_token:                                 # empty = keep the saved one; type "-" to clear it
+            settings.notify_telegram_token = '' if tg_token == '-' else tg_token
+        settings.notify_telegram_chat = (request.form.get('notify_telegram_chat') or '').strip()[:60]
+        settings.notify_phone = (request.form.get('notify_phone') or '').strip()[:30]
         settings.hero_tagline_am = ' '.join((request.form.get('hero_tagline_am') or '').split())[:200]
         settings.hero_tagline_en = ' '.join((request.form.get('hero_tagline_en') or '').split())[:200]
         audit('settings_site', f'hero tagline am="{settings.hero_tagline_am}" en="{settings.hero_tagline_en}"')
@@ -4757,6 +5454,11 @@ def init_db():
         try:
             for table, col, ddl in [
                 ('admin', 'is_active', 'BOOLEAN DEFAULT TRUE'),
+                ('admin', 'totp_secret', 'VARCHAR(64)'),
+                ('admin', 'totp_enabled', 'BOOLEAN DEFAULT FALSE'),
+                ('admin', 'totp_last_step', 'INTEGER DEFAULT 0'),
+                ('admin', 'backup_codes', 'TEXT'),
+                ('admin', 'last_login_ip', "VARCHAR(64) DEFAULT ''"),
                 ('customer', 'phone_verified', 'BOOLEAN DEFAULT FALSE'),
                 ('transporter', 'must_change_password', 'BOOLEAN DEFAULT FALSE'),
                 ('order', 'refund_status', "VARCHAR(20) DEFAULT ''"),
@@ -4768,6 +5470,12 @@ def init_db():
                 ('order', 'cod_approved', 'BOOLEAN DEFAULT FALSE'),
                 ('order', 'deposit_amount', 'FLOAT DEFAULT 0'),
                 ('order', 'idem_key', 'VARCHAR(64)'),
+                ('product', 'vendor_id', 'INTEGER'),
+                ('order_item', 'vendor_id', 'INTEGER'),
+                ('order_item', 'commission_percent', 'FLOAT DEFAULT 0'),
+                ('site_settings', 'notify_telegram_token', "VARCHAR(120) DEFAULT ''"),
+                ('site_settings', 'notify_telegram_chat', "VARCHAR(60) DEFAULT ''"),
+                ('site_settings', 'notify_phone', "VARCHAR(30) DEFAULT ''"),
             ]:
                 _ensure_column(table, col, ddl)
         except Exception as e:
@@ -4981,6 +5689,10 @@ with app.app_context(), init_lock():
         db.session.rollback()
         print('file backfill note:', _e)
 
+if not os.environ.get('SECRET_KEY', '').strip():
+    print('SECURITY NOTE: SECRET_KEY is not set in the environment - set a long random value in your hosting settings.')
+if (os.environ.get('RENDER') or os.environ.get('DYNO')) and not app.config.get('SESSION_COOKIE_SECURE'):
+    print('SECURITY NOTE: running on a hosting platform without SESSION_COOKIE_SECURE=1 - turn it on (HTTPS is required).')
 if app.config['SQLALCHEMY_DATABASE_URI'].startswith('sqlite') and (os.environ.get('RENDER') or os.environ.get('DYNO')):
     import sys
     print('WARNING: running on SQLite on a hosting platform with an ephemeral disk. '

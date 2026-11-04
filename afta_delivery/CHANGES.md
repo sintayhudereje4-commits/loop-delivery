@@ -1,3 +1,11 @@
+# Version 7 - security
+- Admin two-step login (TOTP + backup codes), security alerts for logins, Security page with live checklist, SECURITY.md, bounded requirements, extra CSP directives, startup security notes.
+
+# Version 6
+- Admin notifications: bell, pop-ups, sound, desktop alerts, optional Telegram / SMS alerts.
+- Merchants system: merchants, products per merchant, commission, payouts, statements, public "Sell with us" page.
+- Simpler admin: grouped menu, clean dashboard, collapsible settings.
+
 # Version 5 - renamed to Afta Delivery (አፍታ ዴሊቨሪ)
 - Name, footer, page titles, admin header, SMS prefix ("Afta:"), order numbers (new orders start with "AD"), backups (afta_backup_*), database file (afta.db; an existing dado.db keeps working).
 - Site address: SITE_DOMAIN (default www.aftadelivery.com).

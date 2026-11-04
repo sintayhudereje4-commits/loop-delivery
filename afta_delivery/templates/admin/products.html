@@ -7,6 +7,16 @@
     <a href="{{ url_for('admin_product_add') }}" class="btn btn-primary">+ Add Product</a>
 </div>
 
+{% if vendors %}
+<div style="margin-bottom:12px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
+    <span style="font-weight:600;font-size:.9rem;">Merchant:</span>
+    <a href="{{ url_for('admin_products') }}" class="btn btn-sm {% if not current_vendor %}btn-primary{% else %}btn-outline{% endif %}">All</a>
+    {% for vd in vendors %}
+    <a href="{{ url_for('admin_products', vendor=vd.id) }}" class="btn btn-sm {% if current_vendor == vd.id %}btn-primary{% else %}btn-outline{% endif %}">{{ vd.name }}</a>
+    {% endfor %}
+</div>
+{% endif %}
+
 {% if categories %}
 <div style="margin-bottom:16px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
     <span style="font-weight:600;font-size:.9rem;">Filter by category:</span>
@@ -26,6 +36,7 @@
             <tr>
                 <th>Image</th>
                 <th>Category</th>
+                <th>Merchant</th>
                 <th>Name (AM)</th>
                 <th>Name (EN)</th>
                 <th>Active</th>
@@ -44,6 +55,7 @@
                     {% endif %}
                 </td>
                 <td>{% if p.category %}{{ p.category.name_en }}{% else %}<span style="color:#999;">—</span>{% endif %}</td>
+                <td>{% if p.vendor %}<a href="{{ url_for('admin_vendor_detail', vid=p.vendor.id) }}">{{ p.vendor.name }}</a>{% else %}<span style="color:#999;">own</span>{% endif %}</td>
                 <td>{{ p.name_am }}</td>
                 <td>{{ p.name_en }}</td>
                 <td>{% if p.is_active %}✓{% else %}✗{% endif %}</td>

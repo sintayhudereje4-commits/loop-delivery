@@ -76,6 +76,7 @@
             <p>{% if current_lang == 'am' %}{{ settings.footer_text_am }}{% else %}{{ settings.footer_text_en }}{% endif %}</p>
             <p class="footer-links">
                 <a href="{{ url_for('help_page') }}">{% if current_lang == 'am' %}እገዛ / ድጋፍ{% else %}Help & Support{% endif %}</a>
+                | <a href="{{ url_for('sell_with_us') }}">{% if current_lang == 'am' %}ከእኛ ጋር ይሽጡ{% else %}Sell with us{% endif %}</a>
                 {% if settings.help_phone %} | <a href="tel:{{ settings.help_phone }}">{{ settings.help_phone }}</a>{% endif %}
             </p>
             <p class="copyright">&copy; {{ now.year }} {{ settings.site_name }} · {{ site_domain }}</p>
