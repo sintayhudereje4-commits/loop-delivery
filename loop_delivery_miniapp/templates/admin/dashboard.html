@@ -1,0 +1,100 @@
+{% extends "admin/base_admin.html" %}
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+<h1>Dashboard</h1>
+{% if storage_warning %}
+<div style="background:#ffebee;border:1px solid #c62828;color:#b71c1c;padding:12px 16px;border-radius:8px;margin-bottom:16px;">
+    <strong>⚠ ዳታ አደጋ ላይ ነው / Data at risk:</strong>
+    ድረ ገጹ SQLite በ ephemeral ዲስክ ላይ እየሰራ ነው — redeploy ሲደረግ ትዕዛዞች፣ ደንበኞችና ደረሰኞች ይጠፋሉ።
+    <code>DATABASE_URL</code> ን ወደ PostgreSQL ያዋቅሩ።
+    <br><small>The site runs on SQLite on an ephemeral disk: orders, customers and receipts are wiped on redeploy. Set <code>DATABASE_URL</code> to PostgreSQL.</small>
+</div>
+{% endif %}
+
+{% if security_hint %}
+<div style="background:#fff8e1;border:1px solid #ffb300;color:#6d4c00;padding:12px 16px;border-radius:8px;margin-bottom:16px;">
+    🔐 <strong>Protect your admin account:</strong> turn on two-step login (1 minute).
+    <a href="{{ url_for('admin_security') }}"><strong>Set it up →</strong></a>
+</div>
+{% endif %}
+
+<h2>Needs your attention</h2>
+{% set todo = [
+    (stats.awaiting_quote, 'Orders waiting for a delivery fee', url_for('admin_orders', status='pending')),
+    (stats.payments_to_check, 'Payments to check', url_for('admin_orders', flag='payment')),
+    (unassigned_orders, 'Orders without a transporter', url_for('admin_orders')),
+    (stats.issues, 'Delivery problems', url_for('admin_orders', flag='issue')),
+    (stats.refunds_due, 'Refunds to pay', url_for('admin_orders', flag='refund')),
+    (stats.cod_review, 'Cash receipts to approve', url_for('admin_orders', status='out_for_delivery')),
+    (open_supports, 'Open support requests', url_for('admin_support')),
+    (stats.merchant_requests, 'Merchant requests', url_for('admin_vendors')),
+] %}
+{% set ns = namespace(any=false) %}
+<div class="attention-grid">
+    {% for n, label, link in todo if n %}
+    {% set ns.any = true %}
+    <a class="attn" href="{{ link }}"><div class="n">{{ n }}</div><div class="l">{{ label }}</div></a>
+    {% endfor %}
+</div>
+{% if not ns.any %}<div class="all-clear">✓ Nothing is waiting for you right now.</div>{% endif %}
+
+<h2>Today</h2>
+<div class="stats-grid">
+    <div class="stat-card"><div class="stat-value">{{ stats.orders_today }}</div><div class="stat-label">Orders today</div></div>
+    <div class="stat-card"><div class="stat-value">{{ '{:,.0f}'.format(stats.revenue_today) }}</div><div class="stat-label">Delivered today (ብር)</div></div>
+    <div class="stat-card"><div class="stat-value">{{ '{:,.0f}'.format(stats.bank_today) }}</div><div class="stat-label"><a href="{{ url_for('admin_bank_ledger') }}" style="color:inherit;">Bank received today (ብር)</a></div></div>
+</div>
+
+{% if low_stock %}
+<div class="detail-card" style="margin:18px 0;">
+    <h3>Running low (≤ {{ low_threshold }})</h3>
+    <ul style="margin:0;padding-left:18px;">
+        {% for v, p in low_stock[:6] %}
+        <li><a href="{{ url_for('admin_product_edit', pid=p.id) }}">{{ p.name_en }} — {{ v.weight_kg }} {{ unit_label(p.unit or 'kg', 'en') }}</a>:
+            <strong style="color:{{ '#c62828' if v.stock <= 0 else '#e65100' }};">{{ v.stock }}</strong></li>
+        {% endfor %}
+    </ul>
+</div>
+{% endif %}
+
+<h2>Latest orders</h2>
+<div class="table-wrap">
+    <table class="admin-table">
+        <thead><tr><th>Order</th><th>Phone</th><th>Total</th><th>Status</th><th>When</th><th></th></tr></thead>
+        <tbody>
+            {% for o in recent_orders[:8] %}
+            <tr>
+                <td>…{{ o.order_number[-6:] }}</td>
+                <td>{{ o.phone }}</td>
+                <td>{{ '%.0f'|format(o.total_amount) }} ብር</td>
+                <td><span class="badge badge-{{ o.status }}">{{ o.status }}</span></td>
+                <td>{{ o.created_at|addis }}</td>
+                <td><a href="{{ url_for('admin_order_detail', oid=o.id) }}" class="btn btn-sm">Open</a></td>
+            </tr>
+            {% else %}
+            <tr><td colspan="6">No orders yet</td></tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+<p><a href="{{ url_for('admin_orders') }}">All orders →</a></p>
+
+<details class="more-box">
+    <summary>More numbers</summary>
+    <div class="stats-grid" style="margin-top:8px;">
+        <div class="stat-card"><div class="stat-value">{{ total_orders }}</div><div class="stat-label">All orders</div></div>
+        <div class="stat-card"><div class="stat-value">{{ '{:,.0f}'.format(stats.revenue_7d) }}</div><div class="stat-label">Delivered, last 7 days (ብር)</div></div>
+        <div class="stat-card"><div class="stat-value">{{ '{:,.0f}'.format(stats.revenue_30d) }}</div><div class="stat-label">Delivered, last 30 days (ብር) · {{ stats.delivered_30d }} orders</div></div>
+        <div class="stat-card"><div class="stat-value">{{ '{:,.0f}'.format(stats.bank_30d) }}</div><div class="stat-label">Bank received, 30 days (ብር)</div></div>
+        <div class="stat-card"><div class="stat-value">{{ total_products }}</div><div class="stat-label">Products</div></div>
+        <div class="stat-card"><div class="stat-value">{{ total_transporters }}</div><div class="stat-label">Transporters</div></div>
+    </div>
+    <h3>Top products (30 days)</h3>
+    {% if top_products %}
+    <ol style="margin:0 0 12px;padding-left:18px;">
+        {% for name, qty, amount in top_products %}<li>{{ name }} — {{ qty|int }} pcs · {{ '{:,.0f}'.format(amount or 0) }} ብር</li>{% endfor %}
+    </ol>
+    {% else %}<p style="color:#777;">No orders yet.</p>{% endif %}
+</details>
+{% endblock %}

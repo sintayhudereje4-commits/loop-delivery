@@ -1,0 +1,59 @@
+{% extends "admin/base_admin.html" %}
+{% block title %}Merchants{% endblock %}
+{% block content %}
+<div class="page-header"><h1>Merchants / ነጋዴዎች</h1></div>
+<p class="hint">Traders whose goods you sell on the shop. You list their products here, the shop keeps a commission on every
+<strong>delivered</strong> sale and you record what you pay out to them. Merchants do not need to log in.</p>
+
+{% if requests_new %}
+<div class="detail-card" style="border-left:4px solid #e65100;margin-bottom:20px;">
+    <h3>New requests from the “Sell with us” page ({{ requests_new|length }})</h3>
+    {% for r in requests_new %}
+    <div style="padding:10px 0;border-top:1px solid #eee;">
+        <strong>{{ r.name }}</strong> · <a href="tel:{{ r.phone }}">{{ r.phone }}</a>{% if r.location %} · {{ r.location }}{% endif %}
+        <div style="white-space:pre-wrap;margin:4px 0 8px;">{{ r.goods }}</div>
+        <form method="POST" style="display:inline-flex;gap:8px;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="id" value="{{ r.id }}">
+            <button class="btn btn-sm btn-primary" name="action" value="req_convert" type="submit">Create merchant</button>
+            <button class="btn btn-sm btn-outline" name="action" value="req_dismiss" type="submit">Dismiss</button>
+        </form>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+<form method="POST" class="admin-form" style="margin-bottom:26px;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="add">
+    <h3>Add a merchant</h3>
+    <div class="form-row">
+        <div class="form-group"><label>Name *</label><input type="text" name="name" required maxlength="120"></div>
+        <div class="form-group"><label>Phone</label><input type="text" name="phone" maxlength="30"></div>
+        <div class="form-group"><label>Location</label><input type="text" name="location" maxlength="200"></div>
+        <div class="form-group"><label>Shop commission %</label><input type="number" name="commission_percent" value="10" min="0" max="90" step="0.5"></div>
+    </div>
+    <button class="btn btn-primary" type="submit">Add merchant</button>
+</form>
+
+<div class="table-wrap">
+<table class="admin-table">
+<thead><tr><th>Merchant</th><th>Products</th><th>Commission</th><th>Sales delivered</th><th>Merchant earns</th><th>Paid out</th><th>You owe</th><th></th></tr></thead>
+<tbody>
+{% for r in rows %}
+<tr {% if r.v.is_active is not none and not r.v.is_active %}style="opacity:.55;"{% endif %}>
+    <td><strong>{{ r.v.name }}</strong>{% if r.v.is_active is not none and not r.v.is_active %} <small>(paused)</small>{% endif %}<br><small>{{ r.v.phone }}</small></td>
+    <td><a href="{{ url_for('admin_products', vendor=r.v.id) }}">{{ r.products }}</a></td>
+    <td>{{ '%g'|format(r.v.commission_percent or 0) }}%</td>
+    <td>{{ '{:,.0f}'.format(r.t.gross) }}</td>
+    <td>{{ '{:,.0f}'.format(r.t.net) }}</td>
+    <td>{{ '{:,.0f}'.format(r.t.paid) }}</td>
+    <td><strong style="color:{{ '#c62828' if r.t.balance > 0.5 else '#2e7d32' }};">{{ '{:,.0f}'.format(r.t.balance) }}</strong></td>
+    <td><a class="btn btn-sm" href="{{ url_for('admin_vendor_detail', vid=r.v.id) }}">Open</a></td>
+</tr>
+{% else %}
+<tr><td colspan="8">No merchants yet. Add the first one above.</td></tr>
+{% endfor %}
+</tbody>
+</table>
+</div>
+<p class="hint">Amounts are in ብር, from delivered orders only (delivery fees are not included).</p>
+{% endblock %}

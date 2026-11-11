@@ -1,0 +1,118 @@
+{% extends "admin/base_admin.html" %}
+{% block title %}{{ v.name }}{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>{{ v.name }}</h1>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;">
+        <a class="btn btn-primary" href="{{ url_for('admin_product_add', vendor=v.id) }}">+ Add a product for this merchant</a>
+        <a class="btn btn-outline" href="{{ url_for('admin_vendors') }}">← All merchants</a>
+    </div>
+</div>
+
+<div class="stats-grid">
+    <div class="stat-card"><div class="stat-value">{{ '{:,.0f}'.format(t.gross) }}</div><div class="stat-label">Sales delivered (ብር) · {{ t.qty }} pcs</div></div>
+    <div class="stat-card"><div class="stat-value">{{ '{:,.0f}'.format(t.commission) }}</div><div class="stat-label">Shop commission</div></div>
+    <div class="stat-card"><div class="stat-value">{{ '{:,.0f}'.format(t.net) }}</div><div class="stat-label">Merchant earns</div></div>
+    <div class="stat-card"><div class="stat-value">{{ '{:,.0f}'.format(t.paid) }}</div><div class="stat-label">Already paid out</div></div>
+    <div class="stat-card warning"><div class="stat-value">{{ '{:,.0f}'.format(t.balance) }}</div><div class="stat-label">You still owe the merchant</div></div>
+</div>
+
+<h2>Products ({{ products|length }})</h2>
+<div style="margin-bottom:8px;display:flex;gap:8px;flex-wrap:wrap;">
+    <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="hide_products">
+        <button class="btn btn-sm btn-outline" type="submit" onclick="return confirm('Hide all products of this merchant from the shop?')">Hide all from shop</button></form>
+    <form method="POST"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="show_products">
+        <button class="btn btn-sm btn-outline" type="submit">Show all in shop</button></form>
+</div>
+<div class="table-wrap">
+<table class="admin-table">
+<thead><tr><th>Product</th><th>Shown in shop</th><th>Stock by size</th><th></th></tr></thead>
+<tbody>
+{% for p in products %}
+<tr>
+    <td>{{ p.name_en }} <small>/ {{ p.name_am }}</small></td>
+    <td>{{ '✓' if p.is_active else '✗' }}</td>
+    <td>{% for pv in p.variants %}{{ pv.weight_kg }}{{ p.unit or 'kg' }}: <strong>{{ pv.stock }}</strong>{% if not loop.last %} · {% endif %}{% endfor %}</td>
+    <td><a class="btn btn-sm" href="{{ url_for('admin_product_edit', pid=p.id) }}">Edit</a></td>
+</tr>
+{% else %}
+<tr><td colspan="4">No products yet. Use “Add a product for this merchant”.</td></tr>
+{% endfor %}
+</tbody>
+</table>
+</div>
+
+<h2 style="margin-top:28px;">Pay the merchant</h2>
+<form method="POST" class="admin-form" style="margin-bottom:12px;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="payout">
+    <div class="form-row">
+        <div class="form-group"><label>Amount paid (ብር)</label><input type="number" name="amount" step="0.01" min="0.01" required placeholder="{{ '%.0f'|format(t.balance) if t.balance > 0 else '' }}"></div>
+        <div class="form-group"><label>Reference / transaction ID</label><input type="text" name="reference" maxlength="120"></div>
+        <div class="form-group"><label>Note</label><input type="text" name="note" maxlength="255"></div>
+    </div>
+    <button class="btn btn-primary" type="submit">Record payment to merchant</button>
+    {% if v.payout_info %}<span style="margin-left:12px;color:#555;">Pay to: <strong>{{ v.payout_info }}</strong></span>{% endif %}
+</form>
+{% if payouts %}
+<div class="table-wrap"><table class="admin-table">
+<thead><tr><th>Date</th><th>Amount</th><th>Reference</th><th>Note</th><th></th></tr></thead>
+<tbody>
+{% for po in payouts %}
+<tr {% if po.voided %}style="opacity:.45;text-decoration:line-through;"{% endif %}>
+    <td>{{ po.paid_at|addis }}</td><td>{{ '{:,.2f}'.format(po.amount) }}</td><td>{{ po.reference }}</td><td>{{ po.note }}</td>
+    <td>{% if not po.voided %}<form method="POST" onsubmit="return confirm('Remove this payment record?');">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="void_payout"><input type="hidden" name="id" value="{{ po.id }}">
+        <button class="btn btn-sm btn-danger" type="submit">Remove</button></form>{% endif %}</td>
+</tr>
+{% endfor %}
+</tbody></table></div>
+{% endif %}
+
+<h2 style="margin-top:28px;">Sales (delivered orders)</h2>
+<form method="GET" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;align-items:end;">
+    <label style="font-size:.85rem;">From <input type="date" name="from" value="{{ d_from }}" style="padding:7px;border:1px solid #ccc;border-radius:8px;"></label>
+    <label style="font-size:.85rem;">To <input type="date" name="to" value="{{ d_to }}" style="padding:7px;border:1px solid #ccc;border-radius:8px;"></label>
+    <button class="btn btn-sm btn-primary" type="submit">Filter</button>
+    <a class="btn btn-sm btn-outline" href="{{ url_for('admin_vendor_statement', vid=v.id) }}{% if d_from or d_to %}?from={{ d_from }}&to={{ d_to }}{% endif %}">⬇ Statement (CSV)</a>
+</form>
+<div class="table-wrap">
+<table class="admin-table">
+<thead><tr><th>Date</th><th>Order</th><th>Product</th><th>Qty</th><th>Sale</th><th>Commission</th><th>Merchant gets</th></tr></thead>
+<tbody>
+{% for item, order in sales %}
+{% set comm = (item.subtotal or 0) * (item.commission_percent or 0) / 100 %}
+<tr>
+    <td>{{ order.updated_at|addis }}</td>
+    <td><a href="{{ url_for('admin_order_detail', oid=order.id) }}">{{ order.order_number[-8:] }}</a></td>
+    <td>{{ item.product_name }}</td><td>{{ item.quantity }}</td>
+    <td>{{ '{:,.0f}'.format(item.subtotal) }}</td><td>{{ '{:,.0f}'.format(comm) }} <small>({{ '%g'|format(item.commission_percent or 0) }}%)</small></td>
+    <td>{{ '{:,.0f}'.format(item.subtotal - comm) }}</td>
+</tr>
+{% else %}
+<tr><td colspan="7">No delivered sales yet.</td></tr>
+{% endfor %}
+</tbody>
+</table>
+</div>
+
+<details class="settings-group" style="margin-top:28px;">
+    <summary>Merchant details &amp; settings</summary>
+    <form method="POST" class="admin-form" style="padding-bottom:14px;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="action" value="save">
+        <div class="form-row">
+            <div class="form-group"><label>Name</label><input type="text" name="name" value="{{ v.name }}" required maxlength="120"></div>
+            <div class="form-group"><label>Phone</label><input type="text" name="phone" value="{{ v.phone }}" maxlength="30"></div>
+            <div class="form-group"><label>Location</label><input type="text" name="location" value="{{ v.location }}" maxlength="200"></div>
+        </div>
+        <div class="form-row">
+            <div class="form-group"><label>Shop commission %</label><input type="number" name="commission_percent" value="{{ '%g'|format(v.commission_percent or 0) }}" min="0" max="90" step="0.5">
+                <small>Applies to NEW orders; past sales keep the rate they had.</small></div>
+            <div class="form-group"><label>Pay the merchant to (bank / telebirr)</label><input type="text" name="payout_info" value="{{ v.payout_info }}" maxlength="255"></div>
+        </div>
+        <div class="form-group"><label>Notes</label><textarea name="notes" rows="3" maxlength="2000">{{ v.notes }}</textarea></div>
+        <div class="form-group"><label><input type="checkbox" name="show_name" {% if v.show_name %}checked{% endif %}> Show “Sold by {{ v.name }}” on their product pages</label></div>
+        <div class="form-group"><label><input type="checkbox" name="is_active" {% if v.is_active is none or v.is_active %}checked{% endif %}> Active merchant</label></div>
+        <button class="btn btn-primary" type="submit">Save</button>
+    </form>
+</details>
+{% endblock %}
